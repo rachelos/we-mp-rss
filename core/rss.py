@@ -9,7 +9,10 @@ class RSS:
             self.cache_dir = cache_dir
       
         os.makedirs(self.cache_dir, exist_ok=True)
-        self.rss_file=f"{self.cache_dir}/{name}.xml"
+        normalized_path = os.path.normpath(f"{self.cache_dir}/{name}.xml")
+        if not normalized_path.startswith(os.path.abspath(self.cache_dir)):
+            raise ValueError("Invalid file path: Path traversal detected.")
+        self.rss_file = normalized_path
         pass
     def serialize_datetime(self,obj):
         if isinstance(obj, datetime):
