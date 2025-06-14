@@ -75,6 +75,7 @@ async def get_rss_feeds(
             "title": feed.mp_name,
             "link":  f"{rss_domain}rss/{feed.id}",
             "description": feed.mp_intro,
+            "image": feed.mp_cover,
             "updated": feed.created_at.isoformat()
         } for feed in feeds]
         
