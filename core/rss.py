@@ -59,7 +59,8 @@ class RSS:
             return None 
     def generate_rss(self,rss_list: dict, title: str = "Mp-We-Rss", 
                     link: str = "https://github.com/rachelos/we-mp-rss",
-                    description: str = "RSS频道", language: str = "zh-CN"):
+                    description: str = "RSS频道", language: str = "zh-CN",
+                    image_url: str = ""):
         from core.config import cfg
         full_context=bool(cfg.get("rss.full_context",False))
         
@@ -75,13 +76,23 @@ class RSS:
         ET.SubElement(channel, "language").text = language
         ET.SubElement(channel, "generator").text = "Mp-We-Rss"
         ET.SubElement(channel, "lastBuildDate").text =datetime.now().strftime("%a, %d %b %Y %H:%M:%S %z")
-    
+        # 设置image子项
+        image = ET.SubElement(channel, "image")
+        ET.SubElement(image, "url").text = image_url
+        ET.SubElement(image, "title").text = title
+        ET.SubElement(image, "link").text = link
+
         for rss_item in rss_list:
             item = ET.SubElement(channel, "item")
             ET.SubElement(item, "id").text = rss_item["id"]
             ET.SubElement(item, "title").text = rss_item["title"]
             ET.SubElement(item, "description").text = rss_item["description"] 
             ET.SubElement(item, "guid").text = rss_item["link"]
+            enclosure = ET.SubElement(item, "enclosure")
+            enclosure.set("url", rss_item["image"])
+            enclosure.set("length", "0")
+            enclosure.set("type", "image/jpeg")
+                    
             if full_context==True:
                 try:
                     if cfg.get("rss.cdata",False)==True:
