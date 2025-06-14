@@ -205,6 +205,7 @@ async def get_mp_articles_rss(
             "title": article.title,
             "link":  f"{rss_domain}rss/feed/{article.id}" if cfg.get("rss.local",False) else article.url,
             "description": article.description if article.description != "" else article.title,
+            "image": article.pic_url,
             "content": article.content,
             "updated": datetime.datetime.fromtimestamp(article.publish_time)
         } for article in articles]
@@ -223,7 +224,7 @@ async def get_mp_articles_rss(
             rss.cache_content(article.id, content_data)
         
         # 生成RSS XML
-        rss_xml = rss.generate_rss(rss_list, title=f"{feed.mp_name}",link=rss_domain,description=feed.mp_intro)
+        rss_xml = rss.generate_rss(rss_list, title=f"{feed.mp_name}",link=rss_domain,description=feed.mp_intro,image_url=feed.mp_cover)
         
         return Response(
             content=rss_xml,
