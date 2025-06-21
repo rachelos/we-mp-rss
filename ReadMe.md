@@ -75,11 +75,12 @@ copy config.example.yaml config.yaml
 
 4. 启动API服务
 ```bash
+python3 init_sys.py
 uvicorn web:app --host 0.0.0.0 --port 8001 --reload
 ```
 或
 ```bash
-python3 main.py -job true -init true
+sh start.sh
 ```
 
 ### 前端界面
