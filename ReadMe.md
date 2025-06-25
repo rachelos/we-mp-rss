@@ -154,8 +154,8 @@ docker run -d \
   --name we-mp-rss \
   -p 8001:8001 \
   -e DB=sqlite:///data/db.db \
-  -e USERNAME:admin \
-  -e PASSWORD:admin@123 \
+  -e USERNAME=admin \
+  -e PASSWORD=admin@123 \
   -e DINGDING_WEBHOOK=https://oapi.dingtalk.com/robot/send?access_token=xxx \
   -v $(pwd)/data:/app/data \
   ghcr.io/rachelos/we-mp-rss:latest
@@ -167,8 +167,8 @@ docker run -d \
   --name we-mp-rss \
   -p 8001:8001 \
   -e DB=mysql+pymysql://<username>:<password>@<host>/<database>?charset=utf8mb4 \
-  -e USERNAME:admin \
-  -e PASSWORD:admin@123 \
+  -e USERNAME=admin \
+  -e PASSWORD=admin@123 \
   -e DINGDING_WEBHOOK=https://oapi.dingtalk.com/robot/send?access_token=xxx \
   -v $(pwd)/data:/app/data \
   ghcr.io/rachelos/we-mp-rss:latest
