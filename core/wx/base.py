@@ -60,7 +60,7 @@ class WxGather:
                     art['description']=data['digest']
                 if CallBack(art):
                     art["ext"]=Ext_Data
-                    art.pop("content")
+                    # art.pop("content")
                     self.articles.append(art)
 
 

@@ -16,8 +16,7 @@ http://<您的ip>:8001/  即可开启
 docker run -d  --name we-mp-rss  -p 8001:8001   rachelos/we-mp-rss:latest
 docker run -d  --name we-mp-rss  -p 8001:8001   docker.1ms.run/rachelos/we-mp-rss:latest
 ```
-</div>
-<center>
+
  <br/>
  <img src="https://github.com/user-attachments/assets/cbe924f2-d8b0-48b0-814e-7c06ccb1911c" height="60" />
     <img src="https://github.com/user-attachments/assets/6997a236-3df3-49d5-98a4-514f6d1a02c4" height="60" />
@@ -31,7 +30,7 @@ docker run -d  --name we-mp-rss  -p 8001:8001   docker.1ms.run/rachelos/we-mp-rs
     <a href="https://discord.gg/followapp" target="_blank"><img src="https://img.shields.io/badge/dynamic/json?url=https%3A%2F%2Fdiscord.com%2Fapi%2Finvites%2Ffollowapp%3Fwith_counts%3Dtrue&query=approximate_member_count&color=5865F2&label=Discord&labelColor=black&logo=discord&logoColor=white&style=flat-square"/></a>
     <br />
 一个用于订阅和管理微信公众号内容的工具，提供RSS订阅功能。
-</center>
+</div>
 <p align="center">
   <a href="https://github.com/DIYgod/sponsors">
     <img src="https://raw.githubusercontent.com/DIYgod/sponsors/main/sponsors.wide.svg" />

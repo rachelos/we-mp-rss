@@ -61,10 +61,9 @@ def call_webhook(hook: MessageWebHook) -> str:
         ValueError: 当webhook调用失败时抛出
     """
     template = hook.task.message_template if hook.task.message_template else """{
-        "feed": "{{feed.mp_name}}",
         "articles": [
             {% for article in articles %}
-            {"title": "{{article.title}}", "pub_date": "{{article.pub_date}}"}{% if not loop.last %},{% endif %}
+             {{article}}{% if not loop.last %},{% endif %}{% endfor %}]
             {% endfor %}
         ]
     }"""
@@ -83,7 +82,7 @@ def call_webhook(hook: MessageWebHook) -> str:
         return 
     # 发送webhook请求
     import requests
-    print_success(f"发送webhook请求{payload}")
+    # print_success(f"发送webhook请求{payload}")
     try:
         response = requests.post(
             hook.task.web_hook_url,

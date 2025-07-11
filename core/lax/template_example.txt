@@ -15,3 +15,26 @@
 商品：{{ order.product }}
 数量：{{ order.quantity }}
 总价：{{ order.price * order.quantity }}
+
+
+JSON嵌套
+{
+ "feed": "{{feed.mp_name}}",
+"articles":[
+{% for article in articles %}
+    {"title": "{{article.title}}", "pub_date": "{{article.publish_time}}"}
+    {% if not loop.last %},{% endif %}
+{% endfor %}
+]
+}
+
+JSON嵌套2
+{
+ "feed": "{{feed.mp_name}}",
+"articles":[
+{% for article in articles %}
+    {"title": "{{article.title}}", "pub_date": "{{article.publish_time}}"}
+    {% if not loop.last %},{% endif %}
+{% endfor %}
+]
+}

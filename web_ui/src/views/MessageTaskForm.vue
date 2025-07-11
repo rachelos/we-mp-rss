@@ -139,11 +139,18 @@ onMounted(() => {
             placeholder="请输入消息模板内容"
             :auto-size="{ minRows: 4, maxRows: 8 }"
           />
-          <a-button 
+          <a-button v-if="formData.message_type === 0"
             type="outline" 
             style="margin-top: 8px"
             @click="formData.message_template = '### {{feed.mp_name}} 订阅消息：\n{% if articles %}\n{% for article in articles %}\n- [**{{ article.title }}**]({{article.url}}) ({{ article.publish_time }})\n\n{% endfor %}\n{% else %}\n- 暂无文章\n\n{% endif %}'">
-            使用示例模板
+            使用示例消息模板
+          </a-button>
+          <a-button v-else
+            type="outline" 
+            style="margin-top: 8px"
+            @click="formData.message_template = '{\'articles\': [{% for article in articles %}{{article}}{% if not loop.last %},{% endif %}{% endfor %}]{% endfor %}]}'">
+            
+            使用示例WebHook模板
           </a-button>
         </a-form-item>
 

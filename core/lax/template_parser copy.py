@@ -202,8 +202,7 @@ class TemplateParser:
                             'index0': item_idx,
                             'first': item_idx == 0,
                             'last': item_idx == total_items - 1,
-                            'length': total_items,
-                            'parentloop': context.get('loop')  # Save parent loop context
+                            'length': total_items
                         }
                         
                         # Render loop content with current item
