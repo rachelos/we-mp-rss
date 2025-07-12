@@ -75,6 +75,10 @@ gather:
   #自动检查未采集文章内容的时间间隔 单位秒默认59分钟 允许值 1-59分钟之间 默认59分钟
   content_auto_interval: ${GATHER.CONTENT_AUTO_INTERVAL:-59}
 
+webhook:
+  #文章内容的发送格式(默认使用html格式，可选text、markdown)
+  content_format: ${WEBHOOK.CONTENT_FORMAT:-html}
+
 #安全配置
 safe:
     # 需要隐藏的配置信息，用逗号分隔 如：db,secret,token等 

@@ -7,6 +7,9 @@ from dataclasses import dataclass
 from core.lax import TemplateParser
 from datetime import datetime
 from core.log import logger
+from core.config import cfg
+from bs4 import BeautifulSoup
+import re
 @dataclass
 class MessageWebHook:
     task: MessageTask
@@ -61,29 +64,99 @@ def call_webhook(hook: MessageWebHook) -> str:
         ValueError: 当webhook调用失败时抛出
     """
     template = hook.task.message_template if hook.task.message_template else """{
-        "articles": [
-            {% for article in articles %}
-             {{article}}{% if not loop.last %},{% endif %}{% endfor %}]
-            {% endfor %}
-        ]
-    }"""
-    parser = TemplateParser(template)
+  "feed": {
+    "id": "{{ feed.id }}",
+    "name": "{{ feed.mp_name }}"
+  },
+  "articles": [
+    {% if articles %}
+     {% for article in articles %}
+        {
+          "id": "{{ article.id }}",
+          "mp_id": "{{ article.mp_id }}",
+          "title": "{{ article.title }}",
+          "pic_url": "{{ article.pic_url }}",
+          "url": "{{ article.url }}",
+          "description": "{{ article.description }}",
+          "publish_time": "{{ article.publish_time }}"
+        }{% if not loop.last %},{% endif %}
+      {% endfor %}
+    {% endif %}
+  ],
+  "task": {
+    "id": "{{ task.id }}",
+    "name": "{{ task.name }}"
+  },
+  "now": "{{ now }}"
+}
+"""
+    
+    # 检查template是否需要content
+    template_needs_content = "content" in template.lower()
+    
+    # 根据content_format处理内容
+    content_format = cfg.get("webhook.content_format", "html")
+    logger.info(f'Content将以{content_format}格式发送')
+    processed_articles = []
+    for article in hook.articles:
+        if isinstance(article, dict) and "content" in article and article["content"]:
+            processed_article = article.copy()
+            
+            # 只有template需要content时才进行格式转换
+            if template_needs_content:
+                if content_format == 'text':
+                    # 去除HTML标签，保留纯文本
+                    soup = BeautifulSoup(processed_article['content'], 'html.parser')
+                    text = soup.get_text().strip()
+                    processed_article['content'] = re.sub(r'\n\s*\n', '\n\n', text)
+                    
+                elif content_format == 'markdown':
+                    from markdownify import markdownify
+                    # 转换HTML到Markdown
+                    processed_article['content'] = markdownify(
+                        processed_article['content'],
+                        heading_style="ATX",
+                        bullets='-*+',
+                        code_language='python'
+                    )
+                    # 替换多个连续换行符为单个换行符
+                    processed_article['content'] = re.sub(r'\n\s*\n', '\n\n', processed_article['content'])
+                    
+            processed_articles.append(processed_article)
+        else:
+            processed_articles.append(article)
+    
     data = {
         "feed": hook.feed,
-        "articles": hook.articles,
+        "articles": processed_articles,
         "task": hook.task,
-        'now': datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        "now": datetime.now().strftime("%Y-%m-%d %H:%M:%S")
     }
-    payload = parser.render(data)
-
-    # 确保payload是合法的JSON字符串
+   
+   # 预处理content字段
     import json
-    try:
-        payload = json.dumps(data, ensure_ascii=False, default=str)
-    except TypeError as e:
-        logger.error(f"JSON序列化失败: {str(e)}")
-        raise ValueError(f"数据转换失败: {str(e)}")
+    def process_content(content):
+        if content is None:
+            return ""
+        # 进行JSON转义处理引号
+        json_escaped = json.dumps(content, ensure_ascii=False)
+        # 去掉外层引号避免重复
+        return json_escaped[1:-1]
     
+    # 处理articles中的content字段，进行JSON转义
+    if "articles" in data:
+        for i, article in enumerate(data["articles"]):
+            if isinstance(article, dict):
+                if "content" in article:
+                    data["articles"][i]["content"] = process_content(article["content"])
+            elif hasattr(article, "content"):
+                setattr(data["articles"][i], "content", process_content(getattr(article, "content")))
+    
+    parser = TemplateParser(template)
+    
+    payload = parser.render(data)
+    # logger.info(payload)
+
     # 检查web_hook_url是否为空
     if not hook.task.web_hook_url:
         logger.error("web_hook_url为空")
