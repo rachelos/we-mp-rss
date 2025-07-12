@@ -75,6 +75,14 @@ def call_webhook(hook: MessageWebHook) -> str:
         'now': datetime.now().strftime("%Y-%m-%d %H:%M:%S")
     }
     payload = parser.render(data)
+
+    # 确保payload是合法的JSON字符串
+    import json
+    try:
+        payload = json.dumps(data, ensure_ascii=False, default=str)
+    except TypeError as e:
+        logger.error(f"JSON序列化失败: {str(e)}")
+        raise ValueError(f"数据转换失败: {str(e)}")
     
     # 检查web_hook_url是否为空
     if not hook.task.web_hook_url:
