@@ -157,6 +157,7 @@ API服务启动后，访问以下地址查看文档：
 | `DINGDING_WEBHOOK`       | 钉钉机器人Webhook地址                                                          | -                           |
 | `WECHAT_WEBHOOK`         | 微信机器人Webhook地址                                                          | -                           |
 | `FEISHU_WEBHOOK`         | 飞书机器人Webhook地址                                                          | -                           |
+| `CUSTOM_WEBHOOK`         | 自定义Webhook地址                                                          | -                           |
 | `USER_AGENT`             | 用户代理字符串                                                                | Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 |
 | `PORT`                   | API服务端口                                                                   | 8001                        |
 | `DEBUG`                  | 调试模式                                                                      | False                       |

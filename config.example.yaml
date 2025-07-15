@@ -18,6 +18,7 @@ notice:
   dingding: "${DINGDING_WEBHOOK}"
   wechat: "${WECHAT_WEBHOOK}"
   feishu: "${FEISHU_WEBHOOK}"
+  custom: "${CUSTOM_WEBHOOK}"
   
 secret: ${SECRET_KEY:-we-mp-rss}
 user_agent: ${USER_AGENT:-Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36/WeRss}

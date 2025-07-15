@@ -1,6 +1,7 @@
 from .wechat import send_wechat_message
 from .dingtalk import send_dingtalk_message
 from .feishu import send_feishu_message
+from .custom import send_custom_message
 
 def notice( webhook_url, title, text,notice_type: str=None):
     """
@@ -19,8 +20,11 @@ def notice( webhook_url, title, text,notice_type: str=None):
         notice_type = 'wechat'
     elif 'oapi.dingtalk.com' in webhook_url:
         notice_type = 'dingtalk'
-    elif 'open.feishu.cn' in webhook_url:
+    # 兼容企业本地化部署的飞书，如open.feishu.xxxx.com
+    elif 'open.feishu.' in webhook_url:  
         notice_type = 'feishu'
+    else:
+        notice_type = 'custom'
     
     if notice_type == 'wechat':
         send_wechat_message(webhook_url, title, text)
@@ -28,5 +32,7 @@ def notice( webhook_url, title, text,notice_type: str=None):
         send_dingtalk_message(webhook_url, title, text)
     elif notice_type == 'feishu':
         send_feishu_message(webhook_url, title, text)
+    elif notice_type == 'custom':
+        send_custom_message(webhook_url, title, text)
     else:
         print('不支持的通知类型')

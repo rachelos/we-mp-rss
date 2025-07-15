@@ -14,6 +14,10 @@ def sys_notice(text:str="",title:str=""):
     wechat_webhook = cfg.get('notice')['wechat']
     if len(wechat_webhook)>0:
         notice(wechat_webhook, title, markdown_text)
+    custom_webhook = cfg.get('notice')['custom']
+    if len(custom_webhook)>0:
+        notice(custom_webhook, title, markdown_text)
+    
 
 from driver.wx import WX_API
 def send_wx_code(title:str="",url:str=""):
