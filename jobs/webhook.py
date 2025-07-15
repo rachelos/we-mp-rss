@@ -96,7 +96,8 @@ def call_webhook(hook: MessageWebHook) -> str:
     
     # 根据content_format处理内容
     content_format = cfg.get("webhook.content_format", "html")
-    logger.info(f'Content将以{content_format}格式发送')
+    if template_needs_content:
+        logger.info(f'Content将以{content_format}格式发送')
     processed_articles = []
     for article in hook.articles:
         if isinstance(article, dict) and "content" in article and article["content"]:
@@ -143,14 +144,20 @@ def call_webhook(hook: MessageWebHook) -> str:
         # 去掉外层引号避免重复
         return json_escaped[1:-1]
     
-    # 处理articles中的content字段，进行JSON转义
+    # 处理articles中的content、title、description字段，进行JSON转义
     if "articles" in data:
         for i, article in enumerate(data["articles"]):
             if isinstance(article, dict):
                 if "content" in article:
                     data["articles"][i]["content"] = process_content(article["content"])
-            elif hasattr(article, "content"):
+                if "title" in article:
+                    data["articles"][i]["title"] = process_content(article["title"])
+                if "description" in article:
+                    data["articles"][i]["description"] = process_content(article["description"])
+            else:  # 处理Article对象类型
                 setattr(data["articles"][i], "content", process_content(getattr(article, "content")))
+                setattr(data["articles"][i], "title", process_content(getattr(article, "title")))
+                setattr(data["articles"][i], "description", process_content(getattr(article, "description")))
     
     parser = TemplateParser(template)
     
@@ -173,7 +180,8 @@ def call_webhook(hook: MessageWebHook) -> str:
         response.raise_for_status()
         return "Webhook调用成功"
     except Exception as e:
-        raise ValueError(f"Webhook调用失败: {str(e)}")
+        logger.error(f"Webhook调用失败: {str(e)}\nPayload: {payload}")
+        return f"Webhook调用失败: {str(e)}"
 
 def web_hook(hook:MessageWebHook):
     """
