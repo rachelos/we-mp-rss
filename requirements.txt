@@ -51,4 +51,4 @@ wsproto==1.2.0
 markdownify
 reportlab
 apscheduler 
-psuti
+psutil
