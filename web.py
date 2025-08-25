@@ -2,6 +2,7 @@ from fastapi import FastAPI, Request, APIRouter, Depends
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 from fastapi.responses import FileResponse
+import mimetypes
 from fastapi.security import OAuth2PasswordBearer, OAuth2PasswordRequestForm
 from fastapi.openapi.models import OAuthFlows as OAuthFlowsModel
 from fastapi.openapi.models import OAuthFlowPassword
@@ -40,6 +41,11 @@ app = FastAPI(
         "withCredentials": True,
     }
 )
+
+# 配置MIME类型
+mimetypes.add_type('application/javascript', '.js')
+mimetypes.add_type('text/css', '.css')
+mimetypes.add_type('image/svg+xml', '.svg')
 
 # CORS配置
 app.add_middleware(
