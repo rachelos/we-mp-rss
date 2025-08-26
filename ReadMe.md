@@ -158,6 +158,7 @@ http://localhost:3000
 | `PORT` | `8001` | API服务端口 |
 | `DEBUG` | `False` | 调试模式 |
 | `MAX_PAGE` | `5` | 最大采集页数 |
+| `PAGE_LIMIT` | `1` | 最大更新页数 |
 | `RSS_BASE_URL` | 空 | RSS域名地址 |
 | `RSS_LOCAL` | `False` | 是否为本地RSS链接 |
 | `RSS_TITLE` | 空 | RSS标题 |

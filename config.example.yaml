@@ -45,6 +45,8 @@ debug: ${DEBUG:-False}
 
 #最大页数 第一次添加 采集的页数默认5页
 max_page: ${MAX_PAGE:-5}
+#更新页数 之后的更新 采集的页数默认1页
+page_limit: ${PAGE_LIMIT:-1}
 
 rss:
   #RSS域名地址：如https://www.xxx.com/

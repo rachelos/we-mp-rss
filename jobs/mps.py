@@ -11,23 +11,24 @@ from core.print import print_info,print_success,print_error
 from driver.wx import WX_API
 from driver.success import Success
 wx_db=db.Db(tag="任务调度")
+
 def fetch_all_article():
     print("开始更新")
-    wx=WxGather().Model()
+    wx = WxGather().Model()
     try:
         # 获取公众号列表
-        mps=db.DB.get_all_mps()
+        mps = db.DB.get_all_mps()
+        effective_page_limit = int(cfg.get("page_limit", 1))
         for item in mps:
             try:
-                wx.get_Articles(item.faker_id,CallBack=UpdateArticle,Mps_id=item.id,Mps_title=item.mp_name, MaxPage=1)
+                wx.get_Articles(item.faker_id,CallBack=UpdateArticle,Mps_id=item.id,Mps_title=item.mp_name,MaxPage=effective_page_limit)
             except Exception as e:
                 print(e)
-        print(wx.articles) 
+        print(wx.articles)
     except Exception as e:
-        print(e)         
+        print(e)
     finally:
         logger.info(f"所有公众号更新完成,共更新{wx.all_count()}条数据")
-
 
 def test(info:str):
     print("任务测试成功",info)
@@ -36,22 +37,23 @@ from core.models.message_task import MessageTask
 # from core.queue import TaskQueue
 from .webhook import web_hook
 interval=int(cfg.get("interval",60)) # 每隔多少秒执行一次
-def do_job(mp=None,task:MessageTask=None):
+def do_job(mp=None, task: MessageTask=None):
         # TaskQueue.add_task(test,info=datetime.now().strftime("%Y-%m-%d %H:%M:%S"))
         # print("执行任务", task.mps_id)
         print("执行任务")
-        all_count=0
-        wx=WxGather().Model()
+        all_count = 0
+        wx = WxGather().Model()
         try:
-            wx.get_Articles(mp.faker_id,CallBack=UpdateArticle,Mps_id=mp.id,Mps_title=mp.mp_name, MaxPage=1,Over_CallBack=Update_Over,interval=interval)
+            effective_page_limit = int(cfg.get("page_limit", 1))
+            wx.get_Articles(mp.faker_id,CallBack=UpdateArticle,Mps_id=mp.id,Mps_title=mp.mp_name,MaxPage=effective_page_limit,Over_CallBack=Update_Over,interval=interval)
         except Exception as e:
             print_error(e)
             # raise
         finally:
-            count=wx.all_count()
-            all_count+=count
-            from jobs.webhook import MessageWebHook 
-            tms=MessageWebHook(task=task,feed=mp,articles=wx.articles)
+            count = wx.all_count()
+            all_count += count
+            from jobs.webhook import MessageWebHook
+            tms = MessageWebHook(task=task, feed=mp, articles=wx.articles)
             web_hook(tms)
             print_success(f"任务[{mp.mp_name}]执行成功,{count}成功条数")
 
