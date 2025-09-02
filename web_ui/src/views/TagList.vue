@@ -139,6 +139,9 @@ onMounted(() => {
               </template>
             </a-list-item-meta>
             <a-space>
+              <a-button type="text" size="small" :href="`/feed/tag/${item.id}.rss`" target="_blank">
+                订阅
+              </a-button>
               <a-button type="text" size="small" @click="$router.push(`/tags/edit/${item.id}`)">
                 编辑
               </a-button>
