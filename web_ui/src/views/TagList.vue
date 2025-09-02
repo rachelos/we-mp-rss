@@ -103,9 +103,9 @@ onMounted(() => {
           <a-table-column title="操作">
             <template #cell="{ record }">
               <a-space>
-                <a-link type="primary" target="_blank" :href="`/feed/tag/${record.id}.rss`">
+                <a-button type="text" :href="`/feed/tag/${record.id}.rss`" target="_blank">
                   订阅
-                </a-link>
+                </a-button>
                 <a-button type="text" @click="$router.push(`/tags/edit/${record.id}`)">
                   编辑
                 </a-button>
@@ -150,7 +150,7 @@ onMounted(() => {
         </template>
       <template #footer>
           <div v-if="pagination.current * pagination.pageSize < pagination.total" class="load-more">
-            <a-button 
+            <a-button
               type="primary"
               :loading="loadingMore"
               @click="() => {
