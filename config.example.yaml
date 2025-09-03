@@ -95,7 +95,7 @@ safe:
     # 授权加密KEY
     lic_key: "${SAFE_LIC_KEY:-RACHELOS}"
 log:
-  #日志文件路径，默认为空字符串，表示不输出到文件。如果要输出到文件，可以指定一个路径如：/var/log/we-mp-rss.log 如果为空就不纪录
+  #日志文件路径，默认为空字符串，表示不输出到文件。如果要输出到文件，可以指定一个路径如：/var/log/we-mp-rss 如果为空就不纪录，we-mp-rss为文件名
    file: ${LOG_FILE:-}
   #日志级别，默认为INFO，可选DEBUG, INFO, WARNING, ERROR, CRITICAL
    level: ${LOG_LEVEL:-INFO}
