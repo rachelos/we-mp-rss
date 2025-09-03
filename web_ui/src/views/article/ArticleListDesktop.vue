@@ -395,6 +395,8 @@ const importMPS = async () => {
       const res = await ImportMPS(formData);
       const data = (res as any).data ?? res;
       Message.info(data?.message || "导入成功");
+      // 自动刷新
+      await Promise.all([fetchMpList(), fetchArticles()]);
     };
     input.click();
   } catch (error: any) {
