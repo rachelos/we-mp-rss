@@ -1,6 +1,5 @@
 from logging.handlers import RotatingFileHandler
 import logging
-import os
 try:
     import colorlog
 except ImportError:
@@ -29,11 +28,6 @@ if level=="CRITICAL":
 if len(log_filer)<=0:
     handler = logging.NullHandler()
 else:
-    full_log_path = f'{log_filer}.log'
-    log_directory = os.path.dirname(full_log_path)
-    # 若目录不存在则自动创建
-    if log_directory and not os.path.exists(log_directory):
-        os.makedirs(log_directory, exist_ok=True)
     handler = RotatingFileHandler(f'{log_filer}.log', maxBytes=1024*1024, backupCount=7)
 handler.setLevel(logging.DEBUG)
 
