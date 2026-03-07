@@ -31,11 +31,12 @@ redis:
   url: ${REDIS_URL:-}
 #通知
 notice:
-  #通知方式，可选dingding、wechat、feishu、custom
+  #通知方式，可选dingding、wechat、feishu、custom、bark
   dingding: "${DINGDING_WEBHOOK}"
   wechat: "${WECHAT_WEBHOOK}"
   feishu: "${FEISHU_WEBHOOK}"
   custom: "${CUSTOM_WEBHOOK}"
+  bark: "${BARK_WEBHOOK}"
   
 secret: ${SECRET_KEY:-we-mp-rss}
 user_agent: ${USER_AGENT:-Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36/WeRss}
@@ -117,7 +118,7 @@ gather:
 #安全配置
 safe:
     # 需要隐藏的配置信息，用逗号分隔 如：db,secret,token等 
-    hide_config: "${SAFE_HIDE_CONFIG:-db,secret,token,notice.wechat,notice.feishu,notice.dingding}"
+    hide_config: "${SAFE_HIDE_CONFIG:-db,secret,token,notice.wechat,notice.feishu,notice.dingding,notice.bark}"
     # 授权加密KEY
     lic_key: "${SAFE_LIC_KEY:-RACHELOS}"
 # 微信账号配置
