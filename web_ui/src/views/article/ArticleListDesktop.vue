@@ -1,5 +1,5 @@
 <template>
-  <a-spin class="article-list-spin" :style="{ display: 'block', width: '100%' }" :loading="fullLoading" tip="正在刷新..." size="large">
+  <a-spin :style="{ display: 'block', width: '100%' }" :loading="fullLoading" tip="正在刷新..." size="large">
     <a-layout class="article-list">
       
       <a-layout-sider
@@ -1135,15 +1135,6 @@ const toggleFavoriteStatus = async (record: any) => {
   /* height: calc(100vh - 186px); */
   width: 100%;
   min-width: 0;
-}
-
-:deep(.article-list-spin.arco-spin) {
-  display: block;
-  width: 100%;
-}
-
-:deep(.article-list-spin .arco-spin-children) {
-  width: 100%;
 }
 
 .a-layout-sider {
