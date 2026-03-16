@@ -1,11 +1,23 @@
 <template>
-  <a-spin :loading="fullLoading" tip="正在刷新..." size="large">
+  <a-spin class="article-list-spin" :style="{ display: 'block', width: '100%' }" :loading="fullLoading" tip="正在刷新..." size="large">
     <a-layout class="article-list">
       
-      <a-layout-sider :width="300"
-        :style="{ background: '#fff', padding: '0', borderRight: '1px solid #eee', display: 'flex', flexDirection: 'column', border: 0 }">
-        <a-card :bordered="false" title="公众号"
-          :headStyle="{ padding: '12px 16px', borderBottom: '1px solid #eee', background: '#fff', zIndex: 1, border: 0 }">
+      <a-layout-sider
+        :width="siderCollapsed ? 0 : 300"
+        :style="{
+          background: '#fff',
+          padding: '0',
+          borderRight: siderCollapsed ? '0' : '1px solid #eee',
+          display: 'flex',
+          flexDirection: 'column',
+          border: 0,
+          overflow: 'hidden',
+          transition: 'width 0.2s ease'
+        }"
+      >
+        <div v-show="!siderCollapsed" style="height: 100%;">
+          <a-card :bordered="false" title="公众号"
+            :headStyle="{ padding: '12px 16px', borderBottom: '1px solid #eee', background: '#fff', zIndex: 1, border: 0 }">
           <template #extra>
             <a-dropdown>
               <a-button type="primary">
@@ -70,11 +82,29 @@
             <a-pagination :total="mpPagination.total" simple @change="handleMpPageChange" :show-total="true"
               style="margin-top: 1rem;" />
           </div>
-        </a-card>
+          </a-card>
+        </div>
       </a-layout-sider>
 
-      <a-layout-content :style="{ padding: '20px', width: '100%' }">
-        <a-page-header :title="activeFeed ? activeFeed.name : '全部'" :subtitle="'管理您的公众号订阅内容'" :show-back="false">
+      <a-layout-content :style="{ padding: '20px', paddingLeft: siderCollapsed ? '8px' : '20px', minWidth: '0', flex: '1 1 0' }">
+        <a-page-header :subtitle="'管理您的公众号订阅内容'" :show-back="false">
+          <template #title>
+            <a-space>
+              <a-button
+                type="text"
+                size="small"
+                @click="siderCollapsed = !siderCollapsed"
+                :title="siderCollapsed ? '展开侧栏' : '折叠侧栏'"
+                :aria-label="siderCollapsed ? '展开侧栏' : '折叠侧栏'"
+              >
+                <template #icon>
+                  <IconMenuUnfold v-if="siderCollapsed" />
+                  <IconMenuFold v-else />
+                </template>
+              </a-button>
+              <span>{{ activeFeed ? activeFeed.name : '全部' }}</span>
+            </a-space>
+          </template>
           <template #extra>
             <a-space>
               <span style="font-size: 12px; color: var(--color-text-3);">{{ issourceUrl ? '原链接' : '内链' }}</span>
@@ -150,48 +180,50 @@
 
         <a-card style="border:0">
           <a-alert type="success" closable>{{ activeFeed?.mp_intro || "请选择一个公众号码进行管理,搜索文章后再点击订阅会有惊喜哟！！！" }}</a-alert>
-          <div class="search-bar">
-            <a-input-search class="search-input" v-model="searchText" placeholder="搜索文章标题" @search="handleSearch" @keyup.enter="handleSearch"
-              allow-clear />
-            <a-checkbox class="favorite-filter" :model-value="onlyFavorite" @change="handleFavoriteFilterChange">仅显示已收藏</a-checkbox>
+           <div class="search-bar">
+             <a-input-search class="search-input" v-model="searchText" placeholder="搜索文章标题" @search="handleSearch" @keyup.enter="handleSearch"
+               allow-clear />
+             <a-checkbox class="favorite-filter" :model-value="onlyFavorite" @change="handleFavoriteFilterChange">仅显示已收藏</a-checkbox>
+           </div>
+          <div class="article-table-scroll">
+            <a-table :columns="columns" :data="articles" :loading="loading" :pagination="pagination" :scroll="{ x: 1500 }" :row-selection="{
+              type: 'checkbox',
+              showCheckedAll: true,
+              width: 50,
+              fixed: true,
+              checkStrictly: true,
+              onlyCurrent: false
+            }" row-key="id" @page-change="handlePageChange" @page-size-change="handlePageSizeChange" v-model:selectedKeys="selectedRowKeys">
+              <template #status="{ record }">
+                <a-tag :color="statusColorMap[record.status]">
+                  {{ statusTextMap[record.status] }}
+                </a-tag>
+              </template>
+              <template #actions="{ record }">
+                <a-space>
+                  <a-button type="text" @click="viewArticle(record)" :title="record.id">
+                    <template #icon><icon-eye /></template>
+                  </a-button>
+                  <a-button type="text" @click="toggleFavoriteStatus(record)" :title="record.is_favorite === 1 ? '取消收藏' : '收藏'">
+                    <template #icon>
+                      <icon-star-fill v-if="record.is_favorite === 1" />
+                      <icon-star v-else />
+                    </template>
+                  </a-button>
+                  <a-button
+                    type="text"
+                    :loading="refreshingArticleIds.includes(String(record.id))"
+                    @click="refreshSingleArticle(record)"
+                  >
+                    <template #icon><icon-refresh /></template>
+                  </a-button>
+                  <a-button type="text" status="danger" @click="deleteArticle(record.id)">
+                    <template #icon><icon-delete /></template>
+                  </a-button>
+                </a-space>
+              </template>
+            </a-table>
           </div>
-          <a-table :columns="columns" :data="articles" :loading="loading" :pagination="pagination" :row-selection="{
-            type: 'checkbox',
-            showCheckedAll: true,
-            width: 50,
-            fixed: true,
-            checkStrictly: true,
-            onlyCurrent: false
-          }" row-key="id" @page-change="handlePageChange" @page-size-change="handlePageSizeChange" v-model:selectedKeys="selectedRowKeys">
-            <template #status="{ record }">
-              <a-tag :color="statusColorMap[record.status]">
-                {{ statusTextMap[record.status] }}
-              </a-tag>
-            </template>
-            <template #actions="{ record }">
-              <a-space>
-                <a-button type="text" @click="viewArticle(record)" :title="record.id">
-                  <template #icon><icon-eye /></template>
-                </a-button>
-                <a-button type="text" @click="toggleFavoriteStatus(record)" :title="record.is_favorite === 1 ? '取消收藏' : '收藏'">
-                  <template #icon>
-                    <icon-star-fill v-if="record.is_favorite === 1" />
-                    <icon-star v-else />
-                  </template>
-                </a-button>
-                <a-button
-                  type="text"
-                  :loading="refreshingArticleIds.includes(String(record.id))"
-                  @click="refreshSingleArticle(record)"
-                >
-                  <template #icon><icon-refresh /></template>
-                </a-button>
-                <a-button type="text" status="danger" @click="deleteArticle(record.id)">
-                  <template #icon><icon-delete /></template>
-                </a-button>
-              </a-space>
-            </template>
-          </a-table>
 
 
           <a-modal v-model:visible="refreshModalVisible" title="刷新设置">
@@ -253,7 +285,7 @@ import { Avatar } from '@/utils/constants'
 import { translatePage, setCurrentLanguage } from '@/utils/translate';
 import { ref, onMounted, h, nextTick, watch, computed } from 'vue'
 import axios from 'axios'
-import { IconApps, IconAtt, IconDelete, IconEdit, IconEye, IconRefresh, IconScan, IconWeiboCircleFill, IconWifi, IconCode, IconCheck, IconClose, IconStop, IconPlayArrow, IconCopy, IconPlus, IconDown, IconExport, IconImport, IconShareExternal, IconStar, IconStarFill, IconLink } from '@arco-design/web-vue/es/icon'
+import { IconApps, IconAtt, IconDelete, IconEdit, IconEye, IconRefresh, IconScan, IconWeiboCircleFill, IconWifi, IconCode, IconCheck, IconClose, IconStop, IconPlayArrow, IconCopy, IconPlus, IconDown, IconExport, IconImport, IconShareExternal, IconStar, IconStarFill, IconLink, IconMenuFold, IconMenuUnfold } from '@arco-design/web-vue/es/icon'
 import { getArticles, deleteArticle as deleteArticleApi, ClearArticle, ClearDuplicateArticle, getArticleDetail, getRefreshArticleTaskStatus, refreshArticle as refreshArticleApi, toggleArticleFavoriteStatus, toggleArticleReadStatus } from '@/api/article'
 import { ExportOPML, ExportMPS, ImportMPS } from '@/api/export'
 import ExportModal from '@/components/ExportModal.vue'
@@ -273,6 +305,7 @@ const loading = ref(false)
 const mpList = ref([])
 const mpLoading = ref(false)
 const activeMpId = ref('')
+const siderCollapsed = ref(false)
 const exportModal = ref()
 const selectedRowKeys = ref([])
 const mpPagination = ref({
@@ -342,8 +375,7 @@ const columns = [
   {
     title: '文章标题',
     dataIndex: 'title',
-    width: window.innerWidth - 1100,
-    ellipsis: true,
+    width: 700,
     render: ({ record }) => h('a', {
       href: issourceUrl.value ? record.url || '#' : "/views/article/" + record.id,
       title: record.title,
@@ -417,6 +449,7 @@ const activeFeed = ref({
   id: "",
   name: "全部",
 })
+
 const canManageMp = (mpId: string) => mpId !== '' && mpId !== FEATURED_MP_ID
 
 const showAddFeaturedArticleModal = () => {
@@ -850,6 +883,7 @@ const handleExportShow = async () => {
 onMounted(() => {
   console.log('组件挂载，开始获取数据')
   initIssourceUrl() // 初始化 issourceUrl 值
+
   fetchMpList().then(() => {
     console.log('公众号列表获取完成')
     fetchArticles()
@@ -1099,6 +1133,17 @@ const toggleFavoriteStatus = async (record: any) => {
 <style scoped>
 .article-list {
   /* height: calc(100vh - 186px); */
+  width: 100%;
+  min-width: 0;
+}
+
+:deep(.article-list-spin.arco-spin) {
+  display: block;
+  width: 100%;
+}
+
+:deep(.article-list-spin .arco-spin-children) {
+  width: 100%;
 }
 
 .a-layout-sider {
@@ -1125,6 +1170,18 @@ const toggleFavoriteStatus = async (record: any) => {
   align-items: center;
   gap: 12px;
   margin-bottom: 20px;
+}
+
+.article-table-scroll {
+  width: 100%;
+  max-width: 100%;
+  min-width: 0;
+  overflow-x: auto;
+  overflow-y: hidden;
+}
+
+:deep(.article-table-scroll .arco-table) {
+  min-width: 1100px;
 }
 
 .search-input {
