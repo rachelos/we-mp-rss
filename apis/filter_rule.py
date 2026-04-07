@@ -368,13 +368,14 @@ def get_filter_rules_for_mp(mp_id: str) -> list:
         return []
 
 
-def apply_filter_rules(html_content: str, mp_id: str) -> str:
+def apply_filter_rules(html_content: str, mp_id: str, remove_xpaths: List[str] = []) -> str:
     """
     对HTML内容应用指定公众号的过滤规则
 
     Args:
         html_content: 原始HTML内容
         mp_id: 公众号ID
+        remove_xpaths: 额外的XPath删除规则列表
 
     Returns:
         过滤后的HTML内容
@@ -400,6 +401,7 @@ def apply_filter_rules(html_content: str, mp_id: str) -> str:
                 remove_selectors=rule.remove_selectors or [],
                 remove_attributes=rule.remove_attributes or [],
                 remove_regx=rule.remove_regex or [],
+                remove_xpaths=remove_xpaths,
                 remove_normal_tag=bool(rule.remove_normal_tag)
             )
         except Exception as e:
