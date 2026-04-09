@@ -8,6 +8,7 @@ from .base import success_response, error_response,BaseResponse
 from datetime import datetime
 from typing import Optional, List, Literal
 import os
+import re
 import threading
 import asyncio
 from concurrent.futures import ThreadPoolExecutor
@@ -153,6 +154,21 @@ async def download_export_file(
     try:
         # 定义基础目录
         base_dir = os.path.abspath("./data/docs")
+
+        # 输入校验：仅允许安全文件名和目录名，阻止路径穿越与绝对路径
+        filename_pattern = re.compile(r"^[A-Za-z0-9._-]{1,255}$")
+        mp_id_pattern = re.compile(r"^[A-Za-z0-9_-]{1,128}$")
+
+        if not filename_pattern.fullmatch(filename):
+            return error_response(400, "非法的文件名")
+        if filename in {".", ".."} or "/" in filename or "\\" in filename:
+            return error_response(400, "非法的文件名")
+
+        if mp_id is not None:
+            if not mp_id_pattern.fullmatch(mp_id):
+                return error_response(400, "非法的公众号ID")
+            if mp_id in {".", ".."} or "/" in mp_id or "\\" in mp_id:
+                return error_response(400, "非法的公众号ID")
 
         # 构建并规范化路径
         if mp_id:
