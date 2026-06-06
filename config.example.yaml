@@ -16,8 +16,6 @@ server:
    threads: ${THREADS:-1}
    #通过web方式授权二维码 默认False 
    auth_web: ${WERSS_AUTH_WEB:-False}
-   #是否发送授权二维码通知 默认False，设为True时通知中附带二维码
-   send_code: ${WERSS_SEND_CODE:-False}
    #是否启用自动刷新文章统计 默认False
    article_stats_refresh_enabled: ${ARTICLE_STATS_REFRESH_ENABLED:-False}
    # 文章统计刷新间隔 默认300秒
