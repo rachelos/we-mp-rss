@@ -3,8 +3,11 @@ import sys
 import os
 import argparse
 from string import Template
+from dotenv import load_dotenv
 from core.print import print_warning, print_error,print_info
 from .file import FileCrypto
+
+load_dotenv()
 class Config: 
     config_path=""
     config={}
