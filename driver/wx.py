@@ -473,14 +473,18 @@ class Wx:
             await driver.open_url(self.WX_LOGIN)
             page = driver.page
 
-            # 等待页面完全加载
-            print_info("正在加载登录页面...")
-            await page.wait_for_load_state("networkidle")
-
             # 定位二维码区域
             qr_tag = ".login__type__container__scan__qrcode"
+            # 微信公众平台登录页可能会持续发起后台请求，等待 networkidle 容易不稳定。
+            # 这里以 DOM 加载完成和二维码元素可见作为截图条件。
+            print_info("正在加载登录页面...")
+            await page.wait_for_load_state("domcontentloaded", timeout=60 * 1000)
+            await page.wait_for_selector(qr_tag, state="visible", timeout=60 * 1000)
+
             # 获取二维码图片URL
             qrcode = await page.query_selector(qr_tag)
+            if qrcode is None:
+                raise Exception("未找到微信授权二维码元素")
             code_src = await qrcode.get_attribute("src")
             print("正在生成二维码图片...")
             print(f"code_src:{code_src}")
@@ -521,7 +525,7 @@ class Wx:
             return self.SESSION
         finally:
             self.release_lock()
-            if NeedExit:
+            if NeedExit and not self.HasLogin():
                 self.Clean()
             await self.Close()
         return self.SESSION
