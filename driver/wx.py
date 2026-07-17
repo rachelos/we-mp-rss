@@ -1,6 +1,7 @@
 from asyncio import wait_for
 from socket import timeout
 import sys
+import asyncio
 
 from sqlalchemy import False_
 
@@ -271,10 +272,15 @@ class Wx:
     def GetCode(self,CallBack=None,Notice=None):
         self.Notice=Notice
         if  self.check_lock():
-            print_warning("微信公众平台登录脚本正在运行，请勿重复运行")
-            return {
-                "code":f"{self.wx_login_url}?t={(time.time())}",
-                "msg":"微信公众平台登录脚本正在运行，请勿重复运行！"}
+            # 检测到残留锁（上次进程崩溃/被杀/或测试遗留的 wx_qrcode.png），
+            # 自动清理后重新启动登录流程，而非直接返回错误导致前端永久卡住。
+            print_warning("检测到残留锁文件，自动清理后重新启动登录流程...")
+            self.Clean()
+            # 同时释放可能残留的进程级锁
+            try:
+                self.release_lock()
+            except Exception:
+                pass
 
         self.Clean()
         print("子线程执行中")
@@ -473,14 +479,39 @@ class Wx:
             await driver.open_url(self.WX_LOGIN)
             page = driver.page
 
-            # 等待页面完全加载
+            # 等待页面加载（用 domcontentloaded，避免 mp.weixin.qq.com 长连接导致 networkidle 永不触发而卡死）
             print_info("正在加载登录页面...")
-            await page.wait_for_load_state("networkidle")
+            await page.wait_for_load_state("domcontentloaded")
 
             # 定位二维码区域
             qr_tag = ".login__type__container__scan__qrcode"
-            # 获取二维码图片URL
+            print_info("正在等待二维码元素出现...")
+            await page.wait_for_selector(qr_tag, state="attached", timeout=30000)
+
+            # 公众号登录页默认处于“账号登录”模式，二维码面板被折叠为 0 尺寸（clientW/H=0），
+            # 直接等待 visible 会超时、导致永远取不到二维码。需先切到“扫码登录”标签使其可见。
             qrcode = await page.query_selector(qr_tag)
+            if not await qrcode.is_visible():
+                print_info("默认非扫码模式，点击“扫码登录”切换...")
+                try:
+                    tab = page.get_by_text("扫码登录", exact=False).first
+                    if await tab.count() > 0:
+                        await tab.click(timeout=8000)
+                except Exception as e:
+                    print_warning(f"点击扫码登录失败: {str(e)}")
+                await page.wait_for_selector(qr_tag, state="visible", timeout=15000)
+                qrcode = await page.query_selector(qr_tag)
+
+            # 放大二维码以便截出清晰可扫的图片（不改变二维码内容）
+            try:
+                await page.evaluate(
+                    "(sel)=>{const el=document.querySelector(sel); if(el){el.style.width='260px'; el.style.height='260px';}}",
+                    qr_tag,
+                )
+                await asyncio.sleep(0.3)
+            except Exception:
+                pass
+
             code_src = await qrcode.get_attribute("src")
             print("正在生成二维码图片...")
             print(f"code_src:{code_src}")
@@ -556,8 +587,10 @@ class Wx:
         cookies = await controller.get_cookies()
         # print("\n获取到的Cookie:")
         self.SESSION = self.format_token(cookies, str(token))
+        # 导航到公众平台首页即视为登录成功；expiry 仅用于提示，
+        # 不再据此把登录态降级为 False（否则 cookie 无明确过期时间时会误判为“未登录”）
         with self._login_lock:
-            self._haslogin = False if self.SESSION["expiry"] is None else True
+            self._haslogin = True
         # 登录成功后不立即清理二维码，保持浏览器运行
         if self._haslogin:
             try:
