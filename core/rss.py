@@ -15,6 +15,34 @@ def select_article_content(article) -> str:
     return clean_article_content(getattr(article, "content", None))
 
 
+def is_usable_rss_content(content: str | None) -> bool:
+    """Reject historical WeChat error/shell pages from full-content feeds."""
+    if not (content or "").strip():
+        return False
+
+    from bs4 import BeautifulSoup
+
+    soup = BeautifulSoup(content, "html.parser")
+    text = soup.get_text(" ", strip=True)
+    hard_error_markers = (
+        "未知错误，请稍后再试",
+        "你暂无权限查看此页面内容",
+        "当前环境异常，完成验证后即可继续访问",
+    )
+    if any(marker in text for marker in hard_error_markers):
+        return False
+
+    has_wechat_shell = (
+        "微信扫一扫可打开此内容" in text
+        and "使用完整服务" in text
+    )
+    meaningful_length = sum(character.isalnum() for character in text)
+    if has_wechat_shell and meaningful_length < 300:
+        return False
+
+    return bool(text) or soup.find(["img", "video", "audio", "iframe"]) is not None
+
+
 def should_filter_articles_without_content() -> bool:
     """Filter incomplete items only when consumers requested full content."""
     from core.config import cfg
@@ -29,7 +57,7 @@ def prepare_rss_articles(articles, require_content: bool):
     prepared = []
     for feed, article in articles:
         content = select_article_content(article)
-        if require_content and not content.strip():
+        if require_content and not is_usable_rss_content(content):
             continue
         prepared.append((feed, article, content))
     return prepared

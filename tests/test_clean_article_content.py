@@ -95,6 +95,24 @@ class CleanArticleContentTest(unittest.TestCase):
 
         self.assertEqual(prepared, [("feed", incomplete, "")])
 
+    @patch("core.rss.clean_article_content", side_effect=lambda content: content or "")
+    def test_full_content_feed_omits_wechat_shell_page(self, _clean_content):
+        shell_page = SimpleNamespace(
+            content=(
+                "<p>知道了 取消 允许</p>"
+                "<p>微信扫一扫可打开此内容，使用完整服务</p>"
+                "<p>视频 小程序 赞 在看 分享 留言 收藏 听过</p>"
+            ),
+            content_html=None,
+        )
+
+        prepared = prepare_rss_articles(
+            [("feed", shell_page)],
+            require_content=True,
+        )
+
+        self.assertEqual(prepared, [])
+
     def test_content_cache_receives_compact_body(self):
         with tempfile.TemporaryDirectory() as temp_dir:
             rss = RSS(name="test", cache_dir=temp_dir)
