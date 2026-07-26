@@ -2,7 +2,39 @@ import xml.etree.ElementTree as ET
 from datetime import datetime, timedelta, timezone
 import os
 import json
+from core.article_content import clean_article_content
 from core.content_format import format_content
+
+
+def select_article_content(article) -> str:
+    """Return cleaned content without exposing a legacy raw WeChat document."""
+    cleaned_content = (getattr(article, "content_html", None) or "").strip()
+    if cleaned_content:
+        return cleaned_content
+
+    return clean_article_content(getattr(article, "content", None))
+
+
+def should_filter_articles_without_content() -> bool:
+    """Filter incomplete items only when consumers requested full content."""
+    from core.config import cfg
+
+    return bool(cfg.get("rss.full_context", False)) and bool(
+        cfg.get("rss.filter_no_content", True)
+    )
+
+
+def prepare_rss_articles(articles, require_content: bool):
+    """Attach selected content and omit incomplete articles when requested."""
+    prepared = []
+    for feed, article in articles:
+        content = select_article_content(article)
+        if require_content and not content.strip():
+            continue
+        prepared.append((feed, article, content))
+    return prepared
+
+
 class RSS:
     cache_dir = os.path.normpath("data/cache/rss")
     content_cache_dir = os.path.normpath("data/cache/content")

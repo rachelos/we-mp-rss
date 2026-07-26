@@ -91,6 +91,8 @@ rss:
   cover: ${RSS_COVER:-}
   #是否显示全文 默认False
   full_context: ${RSS_FULL_CONTEXT:-True}
+  #全文RSS是否过滤尚未抓到正文的文章，正文补齐后会自动进入RSS
+  filter_no_content: ${RSS_FILTER_NO_CONTENT:-True}
   #是否添加封面图片 默认False
   add_cover: ${RSS_ADD_COVER:-True}
   #RSS正文是否启用 CDATA

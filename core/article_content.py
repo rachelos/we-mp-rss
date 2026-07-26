@@ -7,6 +7,13 @@ from core.models.base import DATA_STATUS
 from core.print import print_info, print_warning
 
 
+def clean_article_content(content: str | None) -> str:
+    """Return the compact article body used for storage and syndication."""
+    from tools.fix import fix_html
+
+    return fix_html(content or "")
+
+
 def normalize_content_mode(mode: str | None = None) -> str:
     normalized = (mode or cfg.get("gather.content_mode", "web") or "web").strip().lower()
     if normalized not in {"web", "api"}:
@@ -116,10 +123,15 @@ def sync_article_content(
             return True, mode
 
         from driver.wxarticle import Web
-        from tools.fix import fix_html
+        cleaned_content = clean_article_content(content)
+        if not cleaned_content:
+            print_warning(f"article {article.id} has no usable content after cleaning")
+            return False, mode
 
-        article.content = content
-        article.content_html = fix_html(content)
+        # Keep both columns compatible with existing readers without retaining
+        # the multi-megabyte WeChat document, scripts, and runtime payloads.
+        article.content = cleaned_content
+        article.content_html = cleaned_content
         article.show_type=article_type or article.show_type
         article.status = DATA_STATUS.ACTIVE
         article.has_content = 1

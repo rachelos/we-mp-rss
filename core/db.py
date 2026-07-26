@@ -166,11 +166,13 @@ class Db:
                     and art.title==existing_article.title: # type: ignore
                         return False
                     
-                    if art.content is None:
-                        from tools.fix import fix_html
-                        art.content_html = fix_html(art.content) # type: ignore
+                    if art.content is not None:
+                        from core.article_content import clean_article_content
+                        cleaned_content = clean_article_content(art.content) # type: ignore
+                        art.content = cleaned_content or None # type: ignore
+                        art.content_html = cleaned_content or None # type: ignore
                         # 设置 has_content 字段
-                        art.has_content = 1 if (art.content and art.content.strip()) else 0 # type: ignore
+                        art.has_content = 1 if cleaned_content else 0 # type: ignore
                     session.merge(art)  # 使用 merge 来更新现有记录
                     session.commit()
                     print_warning(f"Article already exists: {art.id}")
@@ -193,8 +195,10 @@ class Db:
             art.content_html = sanitize_utf8(art.content_html) if art.content_html else None # type: ignore
 
             if art.content is not None:
-                from tools.fix import fix_html
-                art.content_html = fix_html(art.content) # type: ignore
+                from core.article_content import clean_article_content
+                cleaned_content = clean_article_content(art.content) # type: ignore
+                art.content = cleaned_content or None # type: ignore
+                art.content_html = cleaned_content or None # type: ignore
 
             # 设置 has_content 字段
             art.has_content = 1 if (art.content and art.content.strip()) else 0 # type: ignore

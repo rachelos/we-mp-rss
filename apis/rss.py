@@ -2,7 +2,7 @@ from fastapi import APIRouter, Depends, Query, HTTPException, Request,Response
 from fastapi import status
 from fastapi.responses import Response
 from core.db import DB
-from core.rss import RSS
+from core.rss import RSS, prepare_rss_articles, should_filter_articles_without_content
 from core.models.feed import Feed
 import json
 from .base import success_response, error_response
@@ -248,12 +248,14 @@ async def get_mp_articles_source(
                 )
             )
       
-        # 查询文章列表
-        total = query.count()
-        # articles = query.order_by(Article.publish_time.desc()).limit(limit).offset(offset).all()
+        # 全文 RSS 不提前发布空正文，避免下游只导入一次后永久保留摘要版本。
+        require_content = should_filter_articles_without_content()
+        if require_content:
+            query = query.filter(Article.has_content == 1)
         if kw!="":
             query=query.filter(format_search_kw(kw))
         articles =query.order_by(Article.publish_time.desc()).limit(limit).offset(offset).all()
+        prepared_articles = prepare_rss_articles(articles, require_content=require_content)
         # 转换为RSS格式数据
         from datetime import datetime, timezone, timedelta
         cst = timezone(timedelta(hours=8))
@@ -262,7 +264,7 @@ async def get_mp_articles_source(
             "title": article.title or "",
             "link":  f"{rss_domain}/views/article/{article.id}" if cfg.get("rss.local",False) else article.url,
             "description": article.description if article.description != "" else article.title or "",
-            "content": article.content or "",
+            "content": content,
             "image": article.pic_url or "",
             "mp_name":_feed.mp_name or "",
             "updated": datetime.fromtimestamp(article.publish_time, tz=cst),
@@ -272,15 +274,15 @@ async def get_mp_articles_source(
                     "cover":_feed.mp_cover,
                     "intro":_feed.mp_intro
             }
-        } for _feed,article in articles]
+        } for _feed,article,content in prepared_articles]
         
 
         # 缓存文章内容
-        for _feed,article in articles:
+        for _feed,article,content in prepared_articles:
             content_data = {
                 "id": article.id,
                 "title": article.title,
-                "content": article.content,
+                "content": content,
                 "publish_time": article.publish_time,
                 "mp_id": article.mp_id,
                 "pic_url": article.pic_url,
