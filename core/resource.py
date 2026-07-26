@@ -1,4 +1,11 @@
+import os
+import sqlite3
+from pathlib import Path
+
 import psutil
+
+from tools.storage_maintenance import resolve_sqlite_path, storage_report
+
 # Desc: 资源信息
 # Date: 2021-04-29 15:59
 # Author: Rachel
@@ -29,6 +36,19 @@ def get_system_resources():
     def to_gb(bytes_value):
             return round(bytes_value / (1024 ** 3), 2)
         
+    database_url = os.getenv("DB", "sqlite:///./data/db.db")
+    data_dir = Path(os.getenv("WERSS_DATA_DIR", "./data"))
+    try:
+        persistent_storage = storage_report(
+            data_dir.resolve(),
+            resolve_sqlite_path(database_url),
+        )
+    except (OSError, ValueError, sqlite3.Error):
+        persistent_storage = {
+            "path": str(data_dir),
+            "available": False,
+        }
+
     resources_info = {
             'cpu': {
                 'percent': cpu_percent,
@@ -51,6 +71,7 @@ def get_system_resources():
                 'cpu_percent': process_cpu_percent,
                 'memory_used': to_gb(process_mem_info.rss),
                 'memory_percent': current_process.memory_percent()
-            }
+            },
+            'persistent_storage': persistent_storage,
         }
     return resources_info
