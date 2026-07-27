@@ -433,6 +433,38 @@ class Wx:
                 except Exception as e:
                     print(f"二维码图片获取失败: {str(e)}")
         return self.isLock
+    async def _wait_qrcode_ready(self, page, qr_tag, timeout=30):
+        """等待登录二维码图片加载完成（异步）
+
+        新版登录页可能默认展示"微信快捷登录"（open.weixin.qq.com iframe），
+        此时经典二维码处于隐藏状态且src为空，直接截图会得到空白图片或超时。
+        检测到该情况时点击"扫码登录"链接切换回二维码登录，
+        再等待二维码图片可见且真正加载完成。
+        """
+        import asyncio
+
+        deadline = time.time() + timeout
+        switch_clicked = False
+        while time.time() < deadline:
+            ready = await page.evaluate(
+                """(sel) => {
+                    const img = document.querySelector(sel);
+                    if (!img) return false;
+                    const style = window.getComputedStyle(img);
+                    if (style.display === 'none' || style.visibility === 'hidden') return false;
+                    return !!img.src && img.complete && img.naturalWidth > 50;
+                }""", qr_tag)
+            if ready:
+                return True
+            if not switch_clicked:
+                switch_link = page.locator("a.login__type__container__link_text", has_text="扫码登录")
+                if await switch_link.count() > 0 and await switch_link.first.is_visible():
+                    print_info("检测到快捷登录页面，切换到扫码登录...")
+                    await switch_link.first.click()
+                    switch_clicked = True
+            await asyncio.sleep(0.5)
+        return False
+
     async def wxLogin(self, CallBack=None, NeedExit=True):
         """
         微信公众平台登录流程（异步）：
@@ -471,11 +503,20 @@ class Wx:
             page = driver.page
 
             # 等待页面完全加载
+            # 新版登录页存在持续的轮询请求，networkidle可能永远不触发，
+            # 超时不视为错误，由后续二维码加载检测兜底
             print_info("正在加载登录页面...")
-            await page.wait_for_load_state("networkidle")
+            try:
+                await page.wait_for_load_state("networkidle", timeout=10000)
+            except Exception:
+                pass
 
             # 定位二维码区域
             qr_tag = ".login__type__container__scan__qrcode"
+            # 新版登录页可能默认展示"微信快捷登录"，二维码被隐藏或src为空，
+            # 需要先切换回扫码登录并等待二维码图片真正加载完成
+            if not await self._wait_qrcode_ready(page, qr_tag):
+                raise Exception("二维码加载超时，请重试")
             # 获取二维码图片URL
             qrcode = await page.query_selector(qr_tag)
             code_src = await qrcode.get_attribute("src")
@@ -500,7 +541,10 @@ class Wx:
                 if self.WX_HOME in current_url:
                     print(f"登录成功，正在获取cookie和token...")
             page.on('framenavigated', handle_frame_navigated)
-            await page.wait_for_event("framenavigated", timeout=5*60 * 1000)
+            # 只等待主页面跳转到公众平台首页，
+            # 不能用 wait_for_event("framenavigated")：页面内的快捷登录iframe
+            # 加载时也会触发该事件，导致未扫码就误判为登录成功
+            await page.wait_for_url(lambda url: "cgi-bin/home" in url, timeout=5*60 * 1000)
 
             from .success import setStatus
             with self._login_lock:

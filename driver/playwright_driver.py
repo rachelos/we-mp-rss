@@ -18,6 +18,7 @@ if sys.platform == 'win32':
 
 from core.print import print_error, print_info, print_warning
 from driver.anti_crawler_config import AntiCrawlerConfig
+from driver.chrome_path import get_chrome_executable_path
 
 @dataclass
 class Metrics:
@@ -54,7 +55,8 @@ class PlaywrightController:
                  proxy_url: Optional[str] = "",
                  user_agent: Optional[str] = None,
                  debug: bool = False,
-                 mobile_mode: bool = False):
+                 mobile_mode: bool = False,
+                 apply_anti_crawler: bool = True):
         """
         初始化异步控制器
 
@@ -72,6 +74,11 @@ class PlaywrightController:
         self.proxy_url = proxy_url
         self.debug = debug
         self.mobile_mode = mobile_mode
+        # 是否应用反爬虫注入（extra_http_headers + 反检测脚本）。
+        # 反爬头含 Cache-Control / Sec-Fetch-* 等非 CORS 安全头，会触发跨域预检，
+        # 导致部分站点（如微信公众平台登录页）自身 JS 资源加载失败、二维码无法渲染。
+        # 微信登录等场景需退化为普通浏览器，故提供关闭开关。
+        self.apply_anti_crawler = apply_anti_crawler
 
         # 反爬虫配置实例
         self.anti_crawler_config = AntiCrawlerConfig()
@@ -119,6 +126,15 @@ class PlaywrightController:
             # 启动 Playwright
             self._playwright = await async_playwright().start()
 
+            # ===== 本地 Chrome 支持（可选，避免强制 playwright install 下载浏览器）=====
+            # 仅当通过环境变量 CHROME_EXECUTABLE_PATH 显式指定（或自动发现到本机标准安装的
+            # Chromium 内核浏览器）时才启用；否则保持上游默认浏览器（默认 webkit，由 Playwright 自带），
+            # 跨平台可移植，Docker/Linux 默认行为不受影响。
+            CHROME_PATH = get_chrome_executable_path()
+            if CHROME_PATH:
+                self.browser_type = "chromium"
+                print_info(f"使用本地 Chrome: {CHROME_PATH}（跳过 Playwright 浏览器下载）")
+
             # 选择浏览器类型
             browser_launcher = getattr(self._playwright, self.browser_type)
 
@@ -138,6 +154,9 @@ class PlaywrightController:
                     "--disable-dev-shm-usage",
                     "--no-sandbox",
                 ]
+                # 使用本地 Chrome 可执行文件，避免下载 Playwright 浏览器
+                if CHROME_PATH:
+                    launch_options["executable_path"] = CHROME_PATH
 
             # 添加代理
             if self.proxy_url:
@@ -157,8 +176,8 @@ class PlaywrightController:
                 "timezone_id": "Asia/Shanghai",
             }
 
-            # 应用额外的HTTP头
-            if "extra_http_headers" in anti_config:
+            # 应用额外的HTTP头（反爬注入可能破坏跨域资源加载，关闭时跳过）
+            if self.apply_anti_crawler and "extra_http_headers" in anti_config:
                 context_options["extra_http_headers"] = anti_config["extra_http_headers"]
 
             # 应用其他可选配置
@@ -171,8 +190,9 @@ class PlaywrightController:
             # 创建页面
             self._page = await self._context.new_page()
 
-            # ========== 核心改造：注入反检测脚本 ==========
-            await self._apply_anti_crawler_scripts(self._page)
+            # ========== 核心改造：注入反检测脚本（关闭反爬时跳过）==========
+            if self.apply_anti_crawler:
+                await self._apply_anti_crawler_scripts(self._page)
 
             # 记录启动时间
             self.metrics.browser_startup_time = time.time() - start_time

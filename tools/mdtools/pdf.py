@@ -44,11 +44,13 @@
 """
 import asyncio
 import sys
+import os
 import atexit
 from typing import Optional, Dict, Any
 from pathlib import Path
 from playwright.async_api import async_playwright, Browser, Page, BrowserContext
 import logging
+from driver.chrome_path import get_chrome_executable_path
 
 # Windows 平台需要使用 ProactorEventLoop 以支持子进程
 # Playwright 需要启动浏览器子进程，必须使用 ProactorEventLoop
@@ -96,9 +98,17 @@ class WebToPDFConverter:
     async def _ensure_browser(self) -> Browser:
         """确保浏览器已启动"""
         if self._browser is None:
+            # ===== 本地 Chrome 支持（可选，避免强制 playwright install 下载浏览器）=====
+            # 仅当通过环境变量 CHROME_EXECUTABLE_PATH 指定（或自动发现到本机标准 Chromium 浏览器）时启用。
+            CHROME_PATH = get_chrome_executable_path()
+            if CHROME_PATH:
+                self.browser_type = "chromium"
             self._playwright = await async_playwright().start()
+            launch_kwargs = {"headless": self.headless}
+            if self.browser_type == "chromium" and CHROME_PATH:
+                launch_kwargs["executable_path"] = CHROME_PATH
             if self.browser_type == "chromium":
-                self._browser = await self._playwright.chromium.launch(headless=self.headless)
+                self._browser = await self._playwright.chromium.launch(**launch_kwargs)
             elif self.browser_type == "firefox":
                 self._browser = await self._playwright.firefox.launch(headless=self.headless)
             elif self.browser_type == "webkit":
