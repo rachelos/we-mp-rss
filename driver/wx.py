@@ -10,7 +10,7 @@ from PIL import Image
 from driver.success import Success
 import time
 import os
-from driver.success import getStatus
+from driver.success import getStatus,invalidateStatus
 from driver.store import Store
 import re
 from threading import Timer, Lock
@@ -140,8 +140,7 @@ class Wx:
             await self.Token(isClose=False)
             if getStatus() is False:
                 await self.Close()
-                from jobs.failauth import send_wx_code
-                send_wx_code("账号过期，请重新扫码登录")
+                invalidateStatus("账号过期，请重新扫码登录")
                 await asyncio.sleep(60)
                 return False
             await asyncio.sleep(1)
@@ -406,9 +405,7 @@ class Wx:
             hasLogin = page.locator("body:has-text('使用账号登录')")
             if await hasLogin.count() > 0:
                 self._haslogin = False
-                from jobs.failauth import send_wx_code
-                import threading
-                threading.Thread(target=send_wx_code,args=(f"公众号平台登录失效,请重新登录",)).start()
+                invalidateStatus("公众号平台登录失效,请重新登录")
                 return False
             return await self.Call_Success()
         except ImportError as e:
