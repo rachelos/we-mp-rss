@@ -53,6 +53,21 @@ class AuthStateTest(unittest.TestCase):
         self.assertEqual(ast.unparse(start.body[0].test), "not CanGetToken()")
         self.assertIsInstance(start.body[1], ast.Try)
 
+    def test_fillback_status_helper_is_imported(self):
+        source = (
+            Path(__file__).resolve().parents[1] / "core/wx/base.py"
+        ).read_text(encoding="utf-8")
+        tree = ast.parse(source)
+        success_imports = {
+            alias.name
+            for node in tree.body
+            if isinstance(node, ast.ImportFrom)
+            and node.module == "driver.success"
+            for alias in node.names
+        }
+
+        self.assertIn("setStatus", success_imports)
+
 
 if __name__ == "__main__":
     unittest.main()

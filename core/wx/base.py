@@ -10,7 +10,7 @@ from core.models.feed import Feed
 from .cfg import cfg,wx_cfg
 from core.print import print_error,print_info, print_warning, print_success
 from core.rss import RSS
-from driver.success import CanGetToken,invalidateStatus
+from driver.success import CanGetToken,invalidateStatus,setStatus
 from driver.wxarticle import Web
 from core.wait import Wait
 import random
