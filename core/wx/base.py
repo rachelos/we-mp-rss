@@ -238,10 +238,13 @@ class WxGather:
                 }
                 if 'digest' in data:
                     art['description']=data['digest']
-                if CallBack(art):
+                callback_result = CallBack(art)
+                if callback_result:
                     art["ext"]=Ext_Data
                     # art.pop("content")
                     self.articles.append(art)
+                return callback_result
+        return None
 
     #通过公众号码平台接口查询公众号
     def search_Biz(self,kw:str="",limit=10,offset=0):

@@ -6,6 +6,7 @@ import yaml
 import re
 from bs4 import BeautifulSoup
 from core.wx.base import WxGather
+from core.gather_pagination import should_stop_after_page
 from core.print import print_error
 from core.log import logger
 # 继承 BaseGather 类
@@ -19,7 +20,7 @@ class MpsApi(WxGather):
                 logger.error(e)
         return ""
     # 重写 get_Articles 方法
-    def get_Articles(self, faker_id:str=None,Mps_id:str=None,Mps_title="",CallBack=None,start_page=0,MaxPage:int=1,interval=10,Gather_Content=True,Item_Over_CallBack=None,Over_CallBack=None):
+    def get_Articles(self, faker_id:str=None,Mps_id:str=None,Mps_title="",CallBack=None,start_page=0,MaxPage:int=1,interval=10,Gather_Content=True,Item_Over_CallBack=None,Over_CallBack=None,StopOnExisting:bool=False):
         super().Start(mp_id=Mps_id)
         Gather_Content = self.Gather_Content
         print(f"API获取模式,是否采集[{Mps_title}]内容：{Gather_Content}\n")
@@ -51,6 +52,7 @@ class MpsApi(WxGather):
             # 随机暂停几秒，避免过快的请求导致过快的被查到
             time.sleep(random.randint(0,interval))
             try:
+                callback_results = []
                 headers = self.fix_header(url)
                 resp = session.get(url, headers=headers, params = params, verify=False)
                 
@@ -86,10 +88,13 @@ class MpsApi(WxGather):
                         item["id"] = item["aid"]
                         item["mp_id"] = Mps_id
                         if CallBack is not None:
-                            super().FillBack(CallBack=CallBack,data=item,Ext_Data={"mp_title":Mps_title,"mp_id":Mps_id})
+                            callback_results.append(super().FillBack(CallBack=CallBack,data=item,Ext_Data={"mp_title":Mps_title,"mp_id":Mps_id}))
                     print(f"第{i+1}页爬取成功\n")
                 # 翻页
                 i += 1
+                if should_stop_after_page(callback_results, StopOnExisting):
+                    print("检测到已存在文章，停止自动翻页")
+                    break
             except requests.exceptions.Timeout:
                 print("Request timed out")
                 break

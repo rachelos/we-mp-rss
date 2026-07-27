@@ -11,6 +11,7 @@ from core.print import print_info,print_success,print_error
 from driver.wx import WX_API
 from driver.success import Success
 from core.redis_client import clear_env_exception
+from core.gather_pagination import normalize_catch_up_max_pages
 wx_db=db.Db(tag="任务调度")
 def fetch_all_article():
     print("开始更新")
@@ -68,7 +69,19 @@ def do_job(mp=None,task:MessageTask=None,isTest=False):
             else:
                 wx=WxGather().Model()
                 try:
-                    wx.get_Articles(mp.faker_id,CallBack=UpdateArticle,Mps_id=mp.id,Mps_title=mp.mp_name, MaxPage=1,Over_CallBack=Update_Over,interval=interval)
+                    max_pages = normalize_catch_up_max_pages(
+                        cfg.get("gather.catch_up_max_pages", 10)
+                    )
+                    wx.get_Articles(
+                        mp.faker_id,
+                        CallBack=UpdateArticle,
+                        Mps_id=mp.id,
+                        Mps_title=mp.mp_name,
+                        MaxPage=max_pages,
+                        Over_CallBack=Update_Over,
+                        interval=interval,
+                        StopOnExisting=True,
+                    )
                     success = True
                 except Exception as e:
                     print_error(f"获取文章失败 [{mp.mp_name}]: {e}")

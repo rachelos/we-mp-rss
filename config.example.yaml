@@ -126,6 +126,8 @@ gather:
   content: ${GATHER.CONTENT:-False}
   #采集模式，web模式（可采集到发布链接)，api模式（可采集临时链接），app模式（采集最新消息）
   model: ${GATHER.MODEL:-web}
+  #定时抓取自动补历史文章的最大页数，遇到已存在文章会提前停止；建议10，允许1-20
+  catch_up_max_pages: ${GATHER.CATCH_UP_MAX_PAGES:-10}
   #是否自动检查未采集文章内容，默认False
   content_auto_check: ${GATHER.CONTENT_AUTO_CHECK:-True}
   #自动检查未采集文章内容的时间间隔 单位秒默认59分钟 允许值 1-59分钟之间 默认59分钟
