@@ -9,7 +9,7 @@ source /app/environment.sh
 source "$plant/bin/activate"
 
 # Optional one-shot migration for reclaiming legacy raw article pages.
-if ! python3 tools/storage_maintenance.py; then
+if ! python3 -m tools.storage_maintenance; then
     echo "Storage maintenance failed; preserving the existing database and continuing startup." >&2
 fi
 

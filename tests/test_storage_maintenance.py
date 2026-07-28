@@ -16,6 +16,14 @@ from tools.storage_maintenance import (
 
 
 class StorageMaintenanceTests(unittest.TestCase):
+    def test_startup_runs_maintenance_as_project_module(self):
+        start_script = Path(__file__).parents[1] / "start.sh"
+
+        self.assertIn(
+            "python3 -m tools.storage_maintenance",
+            start_script.read_text(encoding="utf-8"),
+        )
+
     def create_database(self, root: Path) -> Path:
         db_path = root / "db.db"
         with sqlite3.connect(db_path) as connection:
