@@ -9,6 +9,7 @@ import stat
 import tempfile
 import zlib
 from collections.abc import Callable, Iterator
+from contextlib import closing
 from pathlib import Path
 
 
@@ -48,7 +49,9 @@ def sqlite_metrics(db_path: Path) -> dict:
     if not db_path.exists():
         return {"exists": False, "path": str(db_path)}
 
-    with sqlite3.connect(f"file:{db_path}?mode=ro", uri=True) as connection:
+    with closing(
+        sqlite3.connect(f"file:{db_path}?mode=ro", uri=True)
+    ) as connection:
         page_size = int(connection.execute("PRAGMA page_size").fetchone()[0])
         page_count = int(connection.execute("PRAGMA page_count").fetchone()[0])
         freelist_count = int(
@@ -124,13 +127,19 @@ def create_consistent_sqlite_backup(
     backup_path = backup_dir / "db.sqlite"
     try:
         with (
-            sqlite3.connect(f"file:{db_path}?mode=ro", uri=True, timeout=60) as source,
-            sqlite3.connect(backup_path) as destination,
+            closing(
+                sqlite3.connect(
+                    f"file:{db_path}?mode=ro",
+                    uri=True,
+                    timeout=60,
+                )
+            ) as source,
+            closing(sqlite3.connect(backup_path)) as destination,
         ):
             source.execute("PRAGMA busy_timeout=60000")
             source.backup(destination, pages=1024, sleep=0.05)
 
-        with sqlite3.connect(backup_path) as backup_connection:
+        with closing(sqlite3.connect(backup_path)) as backup_connection:
             integrity = backup_connection.execute("PRAGMA integrity_check").fetchone()[0]
             table_counts = _table_row_counts(backup_connection)
         if integrity != "ok":
@@ -266,7 +275,7 @@ def compact_sqlite_database(
     compact_path.unlink(missing_ok=True)
     original_mode = stat.S_IMODE(db_path.stat().st_mode)
     try:
-        with sqlite3.connect(db_path, timeout=60) as connection:
+        with closing(sqlite3.connect(db_path, timeout=60)) as connection:
             connection.execute("PRAGMA busy_timeout=60000")
             connection.execute("PRAGMA journal_mode=DELETE")
             migration = migrate_legacy_article_content(connection, cleaner=cleaner)
@@ -275,7 +284,7 @@ def compact_sqlite_database(
             escaped_path = str(compact_path).replace("'", "''")
             connection.execute(f"VACUUM INTO '{escaped_path}'")
 
-        with sqlite3.connect(compact_path) as compact_connection:
+        with closing(sqlite3.connect(compact_path)) as compact_connection:
             integrity = compact_connection.execute("PRAGMA integrity_check").fetchone()[0]
             compact_counts = _table_row_counts(compact_connection)
         if integrity != "ok":
@@ -290,7 +299,7 @@ def compact_sqlite_database(
         for suffix in ("-wal", "-shm"):
             Path(f"{db_path}{suffix}").unlink(missing_ok=True)
 
-        with sqlite3.connect(db_path) as replacement_connection:
+        with closing(sqlite3.connect(db_path)) as replacement_connection:
             replacement_integrity = replacement_connection.execute(
                 "PRAGMA integrity_check"
             ).fetchone()[0]
