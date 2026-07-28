@@ -13,6 +13,7 @@ from tools.storage_maintenance import (
     run_storage_maintenance,
     sqlite_metrics,
 )
+from tools.storage_maintenance import main as storage_maintenance_main
 
 
 class StorageMaintenanceTests(unittest.TestCase):
@@ -23,6 +24,22 @@ class StorageMaintenanceTests(unittest.TestCase):
             "python3 -m tools.storage_maintenance",
             start_script.read_text(encoding="utf-8"),
         )
+        self.assertIn(
+            "WERSS_STORAGE_LOW_SPACE_MODE:-false}",
+            start_script.read_text(encoding="utf-8"),
+        )
+
+    def test_low_space_mode_requires_verified_external_backup(self):
+        with patch.dict(
+            "tools.storage_maintenance.os.environ",
+            {
+                "WERSS_COMPACT_STORAGE_ON_START": "test-v1",
+                "WERSS_STORAGE_LOW_SPACE_MODE": "true",
+                "WERSS_STORAGE_EXTERNAL_BACKUP_VERIFIED": "false",
+            },
+            clear=True,
+        ), self.assertRaisesRegex(RuntimeError, "verified external backup"):
+            storage_maintenance_main()
 
     def create_database(self, root: Path) -> Path:
         db_path = root / "db.db"
@@ -73,6 +90,32 @@ class StorageMaintenanceTests(unittest.TestCase):
             self.assertEqual(rows[1][1:3], ("<p>article body</p>",) * 2)
             self.assertEqual(rows[2][1:3], ("<p>cleaned fallback</p>",) * 2)
 
+    def test_low_space_mode_uses_verified_copy_from_temp_directory(self):
+        with (
+            tempfile.TemporaryDirectory() as data_temp_dir,
+            tempfile.TemporaryDirectory() as compact_temp_dir,
+        ):
+            db_path = self.create_database(Path(data_temp_dir))
+
+            result = compact_sqlite_database(
+                db_path,
+                cleaner=lambda _content: "<p>cleaned fallback</p>",
+                low_space=True,
+                temp_dir=Path(compact_temp_dir),
+            )
+
+            self.assertEqual(result["replacement_mode"], "verified_non_atomic_copy")
+            self.assertEqual(list(Path(compact_temp_dir).iterdir()), [])
+            with sqlite3.connect(db_path) as connection:
+                self.assertEqual(
+                    connection.execute("PRAGMA integrity_check").fetchone()[0],
+                    "ok",
+                )
+                self.assertEqual(
+                    connection.execute("SELECT COUNT(*) FROM articles").fetchone()[0],
+                    3,
+                )
+
     def test_clears_only_regenerable_cache_directories(self):
         with tempfile.TemporaryDirectory() as temp_dir:
             data_dir = Path(temp_dir)
@@ -111,7 +154,10 @@ class StorageMaintenanceTests(unittest.TestCase):
                     connection.execute("PRAGMA integrity_check").fetchone()[0],
                     "ok",
                 )
-                self.assertEqual(connection.execute("SELECT COUNT(*) FROM articles").fetchone()[0], 3)
+                self.assertEqual(
+                    connection.execute("SELECT COUNT(*) FROM articles").fetchone()[0],
+                    3,
+                )
 
     def test_request_marker_makes_maintenance_one_shot(self):
         with tempfile.TemporaryDirectory() as temp_dir:

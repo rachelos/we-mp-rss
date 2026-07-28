@@ -267,17 +267,30 @@ def clear_regenerable_caches(data_dir: Path) -> dict:
 def compact_sqlite_database(
     db_path: Path,
     cleaner: Callable[[str], str] = _default_cleaner,
+    low_space: bool = False,
+    temp_dir: Path | None = None,
 ) -> dict:
     if not db_path.exists():
         raise FileNotFoundError(db_path)
 
-    compact_path = db_path.with_name(f"{db_path.name}.compact")
+    if low_space:
+        compact_dir = temp_dir or Path(tempfile.gettempdir())
+        compact_dir.mkdir(parents=True, exist_ok=True)
+        descriptor, compact_name = tempfile.mkstemp(
+            prefix=f"{db_path.name}.", suffix=".compact", dir=compact_dir
+        )
+        os.close(descriptor)
+        compact_path = Path(compact_name)
+    else:
+        compact_path = db_path.with_name(f"{db_path.name}.compact")
     compact_path.unlink(missing_ok=True)
     original_mode = stat.S_IMODE(db_path.stat().st_mode)
     try:
         with closing(sqlite3.connect(db_path, timeout=60)) as connection:
             connection.execute("PRAGMA busy_timeout=60000")
-            connection.execute("PRAGMA journal_mode=DELETE")
+            connection.execute(
+                "PRAGMA journal_mode=OFF" if low_space else "PRAGMA journal_mode=DELETE"
+            )
             migration = migrate_legacy_article_content(connection, cleaner=cleaner)
             connection.execute("PRAGMA wal_checkpoint(TRUNCATE)")
             expected_counts = _table_row_counts(connection)
@@ -292,10 +305,19 @@ def compact_sqlite_database(
         if compact_counts != expected_counts:
             raise RuntimeError("compacted database row counts do not match the source")
 
-        os.chmod(compact_path, original_mode)
         original_bytes = db_path.stat().st_size
         compact_bytes = compact_path.stat().st_size
-        os.replace(compact_path, db_path)
+        os.chmod(compact_path, original_mode)
+        if low_space:
+            with compact_path.open("rb") as source, db_path.open("wb") as destination:
+                shutil.copyfileobj(source, destination, length=1024 * 1024)
+                destination.flush()
+                os.fsync(destination.fileno())
+            os.chmod(db_path, original_mode)
+            replacement_mode = "verified_non_atomic_copy"
+        else:
+            os.replace(compact_path, db_path)
+            replacement_mode = "atomic_replace"
         for suffix in ("-wal", "-shm"):
             Path(f"{db_path}{suffix}").unlink(missing_ok=True)
 
@@ -314,6 +336,7 @@ def compact_sqlite_database(
             "compacted_bytes": compact_bytes,
             "reclaimed_bytes": max(0, original_bytes - compact_bytes),
             "table_counts": expected_counts,
+            "replacement_mode": replacement_mode,
         }
     finally:
         compact_path.unlink(missing_ok=True)
@@ -324,6 +347,8 @@ def run_storage_maintenance(
     database_url: str,
     data_dir: Path,
     cleaner: Callable[[str], str] = _default_cleaner,
+    low_space: bool = False,
+    temp_dir: Path | None = None,
 ) -> dict:
     normalized_id = re.sub(r"[^A-Za-z0-9_.-]", "_", request_id.strip())
     if not normalized_id:
@@ -340,7 +365,12 @@ def run_storage_maintenance(
 
     before = storage_report(data_dir, db_path)
     caches = clear_regenerable_caches(data_dir)
-    compact = compact_sqlite_database(db_path, cleaner=cleaner)
+    compact = compact_sqlite_database(
+        db_path,
+        cleaner=cleaner,
+        low_space=low_space,
+        temp_dir=temp_dir,
+    )
     after = storage_report(data_dir, db_path)
     result = {
         "status": "completed",
@@ -362,7 +392,20 @@ def main() -> None:
 
     database_url = os.getenv("DB", "sqlite:///./data/db.db")
     data_dir = Path(os.getenv("WERSS_DATA_DIR", "./data"))
-    run_storage_maintenance(request_id, database_url, data_dir)
+    low_space = os.getenv("WERSS_STORAGE_LOW_SPACE_MODE", "").lower() == "true"
+    backup_verified = os.getenv(
+        "WERSS_STORAGE_EXTERNAL_BACKUP_VERIFIED", ""
+    ).lower() == "true"
+    if low_space and not backup_verified:
+        raise RuntimeError(
+            "low-space storage maintenance requires a verified external backup"
+        )
+    run_storage_maintenance(
+        request_id,
+        database_url,
+        data_dir,
+        low_space=low_space,
+    )
 
 
 if __name__ == "__main__":

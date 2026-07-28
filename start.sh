@@ -10,6 +10,10 @@ source "$plant/bin/activate"
 
 # Optional one-shot migration for reclaiming legacy raw article pages.
 if ! python3 -m tools.storage_maintenance; then
+    if [ "${WERSS_STORAGE_LOW_SPACE_MODE:-false}" = "true" ]; then
+        echo "Low-space storage maintenance failed; refusing to start with a potentially partial database." >&2
+        exit 1
+    fi
     echo "Storage maintenance failed; preserving the existing database and continuing startup." >&2
 fi
 
