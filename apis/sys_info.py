@@ -1,12 +1,15 @@
+import os
 import platform
-import time
+import sqlite3
 import sys
-import psutil
-from fastapi import APIRouter,Depends
-from typing import Dict, Any
-from core.auth import get_current_user_or_ak
+import time
+from typing import Any, Dict
+
+from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi.responses import StreamingResponse
+
+from core.auth import get_current_user, get_current_user_or_ak
 from .base import success_response, error_response
-from driver.token import wx_cfg
 from core.config import cfg
 from jobs.mps import TaskQueue
 from driver.success import getLoginInfo,getStatus
@@ -43,6 +46,12 @@ async def get_base_info() -> Dict[str, Any]:
     
 
 from core.resource import get_system_resources
+from tools.storage_maintenance import (
+    create_consistent_sqlite_backup,
+    gzip_file_chunks,
+    resolve_sqlite_path,
+)
+
 @router.get("/resources", summary="获取系统资源使用情况")
 async def system_resources(
     current_user: dict = Depends(get_current_user_or_ak)
@@ -64,6 +73,41 @@ async def system_resources(
             code=50002,
             message=f"获取系统资源失败: {str(e)}"
         )
+
+
+@router.get("/storage/backup", summary="下载 SQLite 一致性备份")
+def download_storage_backup(
+    current_user: dict = Depends(get_current_user),
+):
+    if os.getenv("WERSS_STORAGE_BACKUP_ENABLED", "").lower() != "true":
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND)
+    if current_user.get("role") != "admin":
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Admin role required",
+        )
+
+    database_url = os.getenv("DB", "sqlite:///./data/db.db")
+    try:
+        backup_path, metadata = create_consistent_sqlite_backup(
+            resolve_sqlite_path(database_url)
+        )
+    except (OSError, ValueError, sqlite3.Error, RuntimeError) as exc:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Failed to create SQLite backup: {exc}",
+        ) from exc
+
+    headers = {
+        "Content-Disposition": 'attachment; filename="werss-production.sqlite.gz"',
+        "X-SQLite-Integrity": metadata["integrity"],
+        "X-SQLite-Bytes": str(metadata["file_bytes"]),
+    }
+    return StreamingResponse(
+        gzip_file_chunks(backup_path, remove_parent_on_close=True),
+        media_type="application/gzip",
+        headers=headers,
+    )
 from core.article_lax import get_article_info, refresh_article_info
 from .ver import API_VERSION
 from core.base import VERSION as CORE_VERSION,LATEST_VERSION

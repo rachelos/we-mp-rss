@@ -1,3 +1,4 @@
+import gzip
 import sqlite3
 import tempfile
 import unittest
@@ -7,6 +8,8 @@ from unittest.mock import patch
 from tools.storage_maintenance import (
     clear_regenerable_caches,
     compact_sqlite_database,
+    create_consistent_sqlite_backup,
+    gzip_file_chunks,
     run_storage_maintenance,
     sqlite_metrics,
 )
@@ -119,6 +122,30 @@ class StorageMaintenanceTests(unittest.TestCase):
             self.assertEqual(first["status"], "completed")
             self.assertEqual(second["status"], "skipped")
             self.assertTrue(sqlite_metrics(db_path)["exists"])
+
+    def test_streamed_backup_is_consistent_and_removes_temporary_copy(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            db_path = self.create_database(root)
+            backup_path, metadata = create_consistent_sqlite_backup(db_path, root)
+
+            compressed = b"".join(
+                gzip_file_chunks(backup_path, remove_parent_on_close=True)
+            )
+            restored_path = root / "restored.db"
+            restored_path.write_bytes(gzip.decompress(compressed))
+
+            self.assertEqual(metadata["integrity"], "ok")
+            self.assertFalse(backup_path.parent.exists())
+            with sqlite3.connect(restored_path) as connection:
+                self.assertEqual(
+                    connection.execute("PRAGMA integrity_check").fetchone()[0],
+                    "ok",
+                )
+                self.assertEqual(
+                    connection.execute("SELECT COUNT(*) FROM articles").fetchone()[0],
+                    3,
+                )
 
 
 if __name__ == "__main__":

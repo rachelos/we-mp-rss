@@ -6,7 +6,9 @@ import re
 import shutil
 import sqlite3
 import stat
-from collections.abc import Callable
+import tempfile
+import zlib
+from collections.abc import Callable, Iterator
 from pathlib import Path
 
 
@@ -104,6 +106,64 @@ def _table_row_counts(connection: sqlite3.Connection) -> dict[str, int]:
             connection.execute(f'SELECT COUNT(*) FROM "{quoted_name}"').fetchone()[0]
         )
     return counts
+
+
+def create_consistent_sqlite_backup(
+    db_path: Path,
+    temp_root: Path | None = None,
+) -> tuple[Path, dict]:
+    if not db_path.exists():
+        raise FileNotFoundError(db_path)
+
+    backup_dir = Path(
+        tempfile.mkdtemp(
+            prefix="werss-sqlite-backup-",
+            dir=str(temp_root) if temp_root else None,
+        )
+    )
+    backup_path = backup_dir / "db.sqlite"
+    try:
+        with (
+            sqlite3.connect(f"file:{db_path}?mode=ro", uri=True, timeout=60) as source,
+            sqlite3.connect(backup_path) as destination,
+        ):
+            source.execute("PRAGMA busy_timeout=60000")
+            source.backup(destination, pages=1024, sleep=0.05)
+
+        with sqlite3.connect(backup_path) as backup_connection:
+            integrity = backup_connection.execute("PRAGMA integrity_check").fetchone()[0]
+            table_counts = _table_row_counts(backup_connection)
+        if integrity != "ok":
+            raise RuntimeError(f"backup integrity check failed: {integrity}")
+
+        return backup_path, {
+            "integrity": integrity,
+            "file_bytes": backup_path.stat().st_size,
+            "table_counts": table_counts,
+        }
+    except Exception:
+        shutil.rmtree(backup_dir, ignore_errors=True)
+        raise
+
+
+def gzip_file_chunks(
+    source_path: Path,
+    chunk_size: int = 1024 * 1024,
+    remove_parent_on_close: bool = False,
+) -> Iterator[bytes]:
+    compressor = zlib.compressobj(level=6, method=zlib.DEFLATED, wbits=31)
+    try:
+        with source_path.open("rb") as source:
+            while chunk := source.read(chunk_size):
+                compressed = compressor.compress(chunk)
+                if compressed:
+                    yield compressed
+            tail = compressor.flush()
+            if tail:
+                yield tail
+    finally:
+        if remove_parent_on_close:
+            shutil.rmtree(source_path.parent, ignore_errors=True)
 
 
 def _default_cleaner(content: str) -> str:
