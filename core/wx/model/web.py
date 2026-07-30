@@ -118,6 +118,10 @@ class MpsWeb(WxGather):
                 break
             finally:
                 super().Item_Over(item={"mps_id":Mps_id,"mps_title":Mps_title},CallBack=Item_Over_CallBack)
+        # Do not move the cursor if rate limiting, timeout, session failure, or
+        # another incomplete response stopped this crawl before all requested pages.
+        if i >= MaxPage:
+            super().CommitSync(Mps_id)
         super().Over(CallBack=Over_CallBack)
         pass
     # 新增辅助方法用于设置feed状态

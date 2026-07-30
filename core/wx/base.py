@@ -298,15 +298,21 @@ class WxGather:
                 return
             import time
             self.start_time = time.time()  # 记录开始执行时间
-            self.update_mps(
-                mp_id, #type: ingnore
-                            Feed( 
-            sync_time=int(time.time()),
-            update_time=int(time.time()),
-            ))
+            # Delay cursor advancement until the list request completes successfully.
         except Exception as e:
             print_error(f"开始采集失败: {e}")
 
+    def CommitSync(self, mp_id):
+        """"Advance the feed cursor only after a successful list crawl.""""
+        if not mp_id:
+            return
+        self.update_mps(
+            mp_id,
+            Feed(
+                sync_time=int(time.time()),
+                update_time=int(time.time()),
+            ),
+        )
     def Item_Over(self,item=None,CallBack=None):
         print(f"item end")
         _cookies=[{'name': c.name, 'value': c.value, 'domain': c.domain,'expiry':c.expires,'expires':c.expires} for c in self._cookies]
