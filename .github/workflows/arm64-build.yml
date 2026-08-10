@@ -1,0 +1,51 @@
+name: Build arm64 image from upstream
+
+# 每天自动检查官方仓库更新，有更新就重新构建 arm64 镜像
+# 修复: 官方 Dockerfile 硬编码 PLAYWRIGHT_BROWSERS_PATH=/app/env/driver/_x86_64
+#       此 workflow 删除该行，让 install.sh 按 uname -m 动态选择浏览器驱动
+
+on:
+  schedule:
+    - cron: '0 2 * * *'        # 每天 02:00 UTC 检查
+  workflow_dispatch:            # 手动触发
+
+permissions:
+  contents: read
+  packages: write
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout upstream source
+        uses: actions/checkout@v4
+        with:
+          repository: rachelos/we-mp-rss   # 跟踪官方仓库
+          ref: master
+          fetch-depth: 1
+
+      - name: Apply arm64 fix (remove hardcoded x86_64 playwright path)
+        run: |
+          sed -i '/PLAYWRIGHT_BROWSERS_PATH.*_x86_64/d' Dockerfile
+          echo "=== patched Dockerfile ==="
+          grep -n "PLAYWRIGHT\|BROWSER" Dockerfile || true
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Login to GHCR
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Build and push arm64
+        uses: docker/build-push-action@v5
+        with:
+          context: .
+          platforms: linux/arm64
+          push: true
+          tags: |
+            ghcr.io/rayyume/we-mp-rss:arm64
+            ghcr.io/rayyume/we-mp-rss:arm64-$(date +%Y%m%d)
