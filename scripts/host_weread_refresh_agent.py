@@ -107,6 +107,25 @@ def do_refresh() -> dict:
     }
 
 
+def do_renew() -> dict:
+    """强制无头续期（供容器侧每 2 小时的自动续期任务调用）。
+
+    与 do_refresh 的区别：cookie 有效时也执行无头刷新（用 seed 打开 reader 页，
+    抓最新 cookie 写回），实现「失效前主动续期」；cookie 无效时 headless_only=True
+    静默失败、绝不弹窗（登录仍走用户手动扫码）。
+    """
+    try:
+        ok = refresh_weread_cookie(verbose=True, headless_only=True, cooldown_hours=0)
+    except Exception as e:
+        ok = False
+        print(f"[agent] 续期异常: {e}")
+    return {
+        "ok": ok,
+        "renewed": ok,
+        "message": "Cookie 已续期" if ok else "Cookie 无效或续期失败（等待手动登录，未弹窗）",
+    }
+
+
 class _Handler(BaseHTTPRequestHandler):
     def _send(self, code: int, payload: dict):
         body = json.dumps(payload, ensure_ascii=False).encode("utf-8")
@@ -121,6 +140,11 @@ class _Handler(BaseHTTPRequestHandler):
             result = do_refresh()
         self._send(200, result)
 
+    def _renew(self):
+        with _refresh_lock:
+            result = do_renew()
+        self._send(200, result)
+
     def do_GET(self):
         path = self.path.split("?")[0].rstrip("/")
         if path in ("/health", ""):
@@ -129,14 +153,20 @@ class _Handler(BaseHTTPRequestHandler):
             # 宿主机 OS 上探测已安装浏览器（供容器 /weread/browsers 代理给前端下拉）
             from core.browser_detect import detect_browsers
             self._send(200, {"browsers": detect_browsers()})
+        elif path == "/renew":
+            self._renew()
         elif path == "/refresh":
             self._refresh()
         else:
             self._send(404, {"ok": False, "message": "not found"})
 
     def do_POST(self):
-        # /refresh 同时支持 POST（容器 urllib 默认 POST）
-        self._refresh()
+        # /refresh 与 /renew 同时支持 POST（容器 urllib 默认 POST）
+        path = self.path.split("?")[0].rstrip("/")
+        if path == "/renew":
+            self._renew()
+        else:
+            self._refresh()
 
     def log_message(self, *args):
         # 避免把每个请求打到 stderr（已在 do_refresh 内打印关键日志）

@@ -66,6 +66,12 @@ if __name__ == '__main__':
         from jobs import start_job
         threading.Thread(target=start_job,daemon=False).start()
         print_success("已开启定时任务")
+        # 微信读书 Cookie 每 2 小时自动续期（有效则续期、过期则跳过，独立于消息任务）
+        try:
+            from jobs.weread_renew import start_weread_renew
+            start_weread_renew()
+        except Exception as e:
+            print_warning(f"启动微信读书 Cookie 自动续期任务失败: {e}")
     else:
         print_warning("未开启定时任务")
     

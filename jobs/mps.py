@@ -267,6 +267,12 @@ def reload_job():
     scheduler.clear_all_jobs()
     TaskQueue.clear_queue()
     start_job()
+    # 重载后保留微信读书 Cookie 自动续期任务（clear_all_jobs 会清掉它）
+    try:
+        from jobs.weread_renew import start_weread_renew
+        start_weread_renew()
+    except Exception as e:
+        print_error(f"重载微信读书 Cookie 续期任务失败: {e}")
 
 def run(job_id:str=None,isTest=False):
     from .taskmsg import get_message_task
