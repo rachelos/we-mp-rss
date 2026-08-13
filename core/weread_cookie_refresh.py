@@ -24,8 +24,10 @@
 - 宿主机调用一般不传 force_bundled（使用 wx.lic 中配置的 browser_path 指向的本机 Chrome）。
 """
 import os
+import sys
 import json
 import time
+import subprocess
 
 import yaml
 
@@ -145,6 +147,119 @@ def _verify_cookie(cookie: str) -> bool:
         return False
 
 
+def _launch_browser(p, headless, profile_dir, browser_path, force_bundled=False):
+    '''启动 Playwright 持久化上下文（仅在「读取/续期 Cookie」时使用，不用于登录）。'''
+    args = ['--no-sandbox', '--disable-dev-shm-usage', '--disable-gpu']
+    if force_bundled or not browser_path:
+        return p.chromium.launch_persistent_context(profile_dir, headless=headless, args=args)
+    return p.chromium.launch_persistent_context(
+        profile_dir, headless=headless, executable_path=browser_path, args=args)
+
+
+def _find_browser(browser_path):
+    '''定位本机 Chrome 二进制：优先用 wx.lic 的 browser_path，缺失则按平台兜底探测。
+    返回路径或空串（空串表示需要引导用户安装）。'''
+    if browser_path and os.path.exists(browser_path):
+        return browser_path
+    candidates = []
+    if sys.platform == 'darwin':
+        candidates = ['/Applications/Google Chrome.app/Contents/MacOS/Google Chrome']
+    elif sys.platform.startswith('linux'):
+        candidates = [
+            '/usr/bin/google-chrome', '/usr/bin/google-chrome-stable',
+            '/usr/bin/chromium', '/usr/bin/chromium-browser',
+        ]
+    for c in candidates:
+        if os.path.exists(c):
+            return c
+    return ''
+
+
+def _open_normal_browser(profile_dir, browser_path, url, verbose=True):
+    '''打开一个「真实」浏览器窗口（不由 Playwright 驱动），避免被微信读书识别为自动化。
+
+    - 优先用本机 Chrome 二进制 + --user-data-dir 绑定专用 profile（登录态可被后续无头读取）；
+    - 若 Chrome 二进制缺失，则退回系统 open / xdg-open / start（使用默认 profile）。
+    返回 True 表示已发起打开动作。'''
+    chrome = _find_browser(browser_path)
+    if not chrome:
+        # macOS 的 open 是系统内置命令，无需安装；真正会「缺失」的是 Chrome 本身。
+        if sys.platform == 'darwin':
+            tip = '未找到 Chrome，请先安装：brew install --cask google-chrome  或前往 https://www.google.com/chrome/ 下载'
+        elif sys.platform.startswith('linux'):
+            tip = '未找到 Chrome/Chromium，请先安装：sudo apt install -y google-chrome-stable  或 chromium'
+        else:
+            tip = '未找到 Chrome，请先安装 Google Chrome'
+        if verbose:
+            print('[refresh] ' + tip)
+        if sys.platform == 'darwin':
+            subprocess.Popen(['open', url])
+        elif sys.platform.startswith('linux'):
+            subprocess.Popen(['xdg-open', url])
+        elif sys.platform == 'win32':
+            os.startfile(url)
+        return True
+
+    if sys.platform == 'darwin':
+        subprocess.Popen([chrome, '--user-data-dir=' + profile_dir,
+                          '--no-first-run', '--no-default-browser-check', url])
+    elif sys.platform.startswith('linux'):
+        subprocess.Popen([chrome, '--user-data-dir=' + profile_dir, '--no-first-run', url])
+    elif sys.platform == 'win32':
+        subprocess.Popen([chrome, '--user-data-dir=' + profile_dir, '--no-first-run', url])
+    else:
+        subprocess.Popen([chrome, '--user-data-dir=' + profile_dir, url])
+    return True
+
+
+def _profile_locked(profile_dir):
+    '''Chrome 是否正占用该 profile（SingletonLock 存在表示有进程持有）。'''
+    return os.path.exists(os.path.join(profile_dir, 'SingletonLock'))
+
+
+def _wait_login_via_normal_browser(profile_dir, browser_path, url, timeout_s=600, verbose=True):
+    '''session 过期时：打开真实浏览器请用户扫码登录；用户关闭窗口释放锁后，
+    用无头方式从同一 profile 读取 Cookie 并验证。
+
+    关键点：登录发生在「真实 Chrome」（navigator.webdriver=false、无自动化 CDP 连接），
+    不会被微信读书风控；登录态持久化进 profile_dir，关闭后可由 Playwright 无头读取，
+    全程只在「读取」阶段用到 Playwright，不会触发图形验证/操作太频繁。'''
+    from playwright.sync_api import sync_playwright
+
+    # 等待上一步无头刷新残留的 Chrome 完全退出（避免 SingletonLock 冲突
+    # 导致真实浏览器一启动就被 abort，日志里反复出现的 profile in use 就是它）
+    lock_wait_until = time.time() + 30
+    while _profile_locked(profile_dir) and time.time() < lock_wait_until:
+        time.sleep(2)
+
+    # 打开首页而非 reader 页：登录态过期时 reader 页不保证展示二维码，首页必有扫码入口
+    if not _open_normal_browser(profile_dir, browser_path, 'https://weread.qq.com/', verbose=verbose):
+        return ''
+    if verbose:
+        print('[refresh] 请在弹出的 Chrome 窗口用微信扫码登录；登录成功后请关闭该窗口（最多等待 '
+              + str(timeout_s // 60) + ' 分钟）')
+    deadline = time.time() + timeout_s
+    last_err = ''
+    while time.time() < deadline:
+        if not _profile_locked(profile_dir):
+            try:
+                with sync_playwright() as p:
+                    context = _launch_browser(
+                        p, headless=True, profile_dir=profile_dir, browser_path=browser_path)
+                    cookies = context.cookies('https://weread.qq.com')
+                    ck = _dedupe_cookie('; '.join(c['name'] + '=' + c['value'] for c in cookies))
+                    context.close()
+                if 'wr_vid=' in ck and _verify_cookie(ck):
+                    return ck
+                last_err = 'profile 中尚未读到有效微信读书 Cookie（可能还没登录完）'
+            except Exception as e:  # noqa: BLE001
+                last_err = '读取 profile Cookie 失败（浏览器可能仍开着）: ' + str(e)
+        time.sleep(5)
+    if verbose and last_err:
+        print('[refresh] ' + last_err)
+    return ''
+
+
 def _extract_cookie_from_page(page, context, url: str) -> str:
     """优先从 /web/mp/articles 请求头取 Cookie，回退 context.cookies 拼接。"""
     captured = {}
@@ -213,13 +328,7 @@ def refresh_weread_cookie(verbose: bool = True, headless_only: bool = False,
     profile_dir = DEFAULT_PROFILE_DIR
     os.makedirs(profile_dir, exist_ok=True)
 
-    def _launch(p, headless: bool, force_bundled: bool = False):
-        args = ["--no-sandbox", "--disable-dev-shm-usage", "--disable-gpu"]
-        if force_bundled or not browser_path:
-            return p.chromium.launch_persistent_context(profile_dir, headless=headless, args=args)
-        return p.chromium.launch_persistent_context(
-            profile_dir, headless=headless, executable_path=browser_path, args=args,
-        )
+    # 浏览器启动逻辑已抽为模块级 _launch_browser（见上方），此处不再内联定义
 
     def _try(headless: bool, wait_login: bool = False, timeout_s: int = 300,
              force_bundled: bool = False, seed_cookie: str = "") -> str:
@@ -230,7 +339,10 @@ def refresh_weread_cookie(verbose: bool = True, headless_only: bool = False,
         容器无头刷新无法解密宿主写入的 profile cookie，故改以 wx.lic 的 Cookie 为可信源。
         """
         with sync_playwright() as p:
-            context = _launch(p, headless=headless, force_bundled=force_bundled)
+            context = _launch_browser(
+                p, headless=headless, profile_dir=profile_dir,
+                browser_path=browser_path, force_bundled=force_bundled,
+            )
             page = context.new_page()
             # 扫码模式下绝不注入种子 Cookie：过期 Cookie 会让页面停在“已登录但失效”的
             # 状态，既出不来二维码，也会让下面的等待逻辑误判为“已拿到 Cookie”而直接退出。
@@ -318,21 +430,22 @@ def refresh_weread_cookie(verbose: bool = True, headless_only: bool = False,
                   "请在本机运行 'python scripts/refresh_weread_cookie.py' 扫码登录后刷新")
         return False
 
-    # 3) 弹可见窗口，提示扫码登录，等待登录后更新
+    # 3) 登录态已过期：打开「真实」浏览器（非 Playwright 驱动）请用户手动登录，
+    #    避免被微信读书风控识别为自动化。登录态持久化进 profile_dir，关闭窗口后
+    #    由无头方式从同一 profile 读取 Cookie 写回。
     if verbose:
-        print("[refresh] 未获取到有效 Cookie，已打开浏览器窗口，请扫码登录微信读书…")
-        print("[refresh] 等待登录（最长 10 分钟），登录成功后自动保存 Cookie…")
-    cookie = _try(headless=False, wait_login=True, timeout_s=600,
-                 force_bundled=force_bundled, seed_cookie=seed_cookie)
-    if cookie and "wr_vid=" in cookie and _verify_cookie(cookie):
+        print('[refresh] 登录态已过期，将打开本机真实 Chrome 请你扫码登录（非自动化窗口，不会触发风控）…')
+    cookie = _wait_login_via_normal_browser(
+        profile_dir, browser_path, url, timeout_s=600, verbose=verbose)
+    if cookie and 'wr_vid=' in cookie and _verify_cookie(cookie):
         vid = extract_vid(cookie)
-        _save_cookie(cookie, name=data.get("name", ""))
+        _save_cookie(cookie, name=data.get('name', ''))
         if verbose:
-            print(f"[refresh] 扫码登录后 Cookie 已更新 (vid={vid})")
+            print('[refresh] 扫码登录后 Cookie 已更新 (vid=' + vid + ')')
         return True
 
     if verbose:
-        print("[refresh] 等待扫码超时或 Cookie 仍无效，请检查微信读书登录状态")
+        print('[refresh] 等待登录超时或 Cookie 仍无效，请检查微信读书登录状态')
     return False
 
 

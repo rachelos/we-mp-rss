@@ -23,6 +23,11 @@ export async function saveWereadConfig(params: {
     return http.post('/wx/weread/config', params)
 }
 
+/** 探测宿主机已安装浏览器（配置页下拉用） */
+export async function getWereadBrowsers() {
+    return http.get('/wx/weread/browsers')
+}
+
 /** 测试连接 */
 export async function testWereadConnection() {
     return http.post('/wx/weread/test')

@@ -108,6 +108,37 @@ async def get_weread_status(current_user=Depends(get_current_user_or_ak)):
     })
 
 
+@router.get("/browsers", summary="探测宿主机已安装浏览器（配置页下拉用）")
+async def list_weread_browsers(current_user=Depends(get_current_user_or_ak)):
+    """
+    转发到宿主机刷新代理的 /browsers，探测宿主 OS（macOS/Windows）上已安装的浏览器。
+
+    探测必须在宿主机做：容器是 Linux，看不到宿主浏览器。代理不在线时降级返回
+    空列表 + agent_offline=True，前端据此提示。
+    """
+    import urllib.request
+
+    agent_url = (os.environ.get("WEREAD_REFRESH_AGENT_URL")
+                 or "http://host.docker.internal:9876").strip()
+    if agent_url.endswith("/refresh"):
+        agent_url = agent_url[: -len("/refresh")]
+    agent_url = agent_url.rstrip("/") + "/browsers"
+    try:
+        req = urllib.request.Request(agent_url, method="GET")
+        with urllib.request.urlopen(req, timeout=5) as resp:
+            payload = json.loads(resp.read().decode("utf-8"))
+        return success_response({
+            "browsers": payload.get("browsers", []),
+            "agent_offline": False,
+        })
+    except Exception as e:
+        return success_response({
+            "browsers": [],
+            "agent_offline": True,
+            "message": "宿主刷新代理不可达：%s" % e,
+        })
+
+
 @router.post("/cookie", summary="保存微信读书 Cookie")
 async def save_weread_cookie(
     req: WereadCookieRequest,

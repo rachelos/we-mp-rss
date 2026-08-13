@@ -42,8 +42,28 @@
         <a-form-item label="公众号主页 URL" field="cookie_refresh_url" extra="用于自动刷新 Cookie。请填公众号主页（reader 页，形如 https://weread.qq.com/web/mp/reader/xxxx），不要填带 bookId 的 /web/mp/articles 接口地址">
           <a-input v-model="cookieForm.cookie_refresh_url" placeholder="https://weread.qq.com/web/mp/reader/MP_WXS_xxx" />
         </a-form-item>
-        <a-form-item label="浏览器路径（本机 Chrome）" field="browser_path" extra="本机 Chrome 可执行文件路径，用于打开上方 URL 提取 Cookie；留空则用 Playwright 自带 Chromium">
-          <a-input v-model="cookieForm.browser_path" placeholder="/Applications/Google Chrome.app/Contents/MacOS/Google Chrome" />
+        <a-form-item label="本机浏览器" field="browser_path" extra="选择用于打开微信读书提取 Cookie 的浏览器，系统自动探测安装路径并填入；留空则用 Playwright 自带 Chromium">
+          <a-select
+            v-model="browserSelect"
+            placeholder="选择浏览器（自动探测安装路径）"
+            @change="onBrowserChange"
+            allow-clear
+          >
+            <a-option
+              v-for="b in browserOptions"
+              :key="b.key"
+              :value="b.key"
+            >
+              {{ b.name }}{{ b.path ? '（已安装）' : '（未安装）' }}{{ b.supported ? '' : '（暂未支持）' }}
+            </a-option>
+            <a-option value="custom">自定义（手动输入路径）</a-option>
+          </a-select>
+          <div v-if="browserSelect === 'custom'" style="margin-top: 8px">
+            <a-input v-model="cookieForm.browser_path" placeholder="/Applications/Google Chrome.app/Contents/MacOS/Google Chrome" />
+          </div>
+          <a-alert v-if="agentOffline" type="warning" :show-icon="false" style="margin-top: 8px">
+            宿主刷新代理未运行，无法自动探测浏览器，请手动输入路径或先启动代理。
+          </a-alert>
         </a-form-item>
         <a-space>
           <a-button type="primary" @click="saveCookie" :loading="saving">
@@ -138,6 +158,7 @@ import {
   getWereadStatus,
   saveWereadCookie,
   saveWereadConfig,
+  getWereadBrowsers,
   testWereadConnection,
   testWereadMpConnection,
   getWereadBookshelf,
@@ -192,10 +213,70 @@ const collectResult = reactive({
   subtitle: '',
 })
 
+// 浏览器下拉（自动探测）
+interface BrowserOption {
+  key: string
+  name: string
+  type: string
+  supported: boolean
+  path: string
+}
+const browserOptions = ref<BrowserOption[]>([])
+const browserSelect = ref('custom')
+const agentOffline = ref(false)
+
 // 初始化
 onMounted(async () => {
   await loadStatus()
+  await loadBrowsers()
 })
+
+async function loadBrowsers() {
+  try {
+    const data = await getWereadBrowsers() as any
+    agentOffline.value = !!data.agent_offline
+    browserOptions.value = (data.browsers || []).map((b: any) => ({
+      key: b.key,
+      name: b.name,
+      type: b.type,
+      supported: b.supported,
+      path: b.path || '',
+    }))
+    // 回显：已保存路径与某个已安装浏览器一致 → 选中该浏览器，否则回退自定义
+    const savedPath = cookieForm.browser_path
+    if (savedPath) {
+      const hit = browserOptions.value.find((b) => b.path && b.path === savedPath)
+      browserSelect.value = hit ? hit.key : 'custom'
+    } else {
+      browserSelect.value = 'custom'
+    }
+  } catch (e) {
+    agentOffline.value = true
+  }
+}
+
+function onBrowserChange(val: string | number | undefined) {
+  const key = val === undefined || val === null ? '' : String(val)
+  if (!key || key === 'custom') {
+    browserSelect.value = 'custom'
+    return
+  }
+  const b = browserOptions.value.find((x) => x.key === key)
+  if (!b) return
+  if (!b.supported) {
+    Message.error(`${b.name} 暂未支持自动刷新（当前仅 Chromium 内核浏览器可用），请选择其他浏览器或自定义`)
+    browserSelect.value = 'custom'
+    return
+  }
+  if (!b.path) {
+    Message.error(`未检测到 ${b.name} 的安装路径，配置失败；请先安装该浏览器或选择其他浏览器`)
+    browserSelect.value = 'custom'
+    return
+  }
+  cookieForm.browser_path = b.path
+  cookieForm.browser_type = b.type
+  Message.success(`已自动填入 ${b.name} 路径`)
+}
 
 async function loadStatus() {
   try {

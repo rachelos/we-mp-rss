@@ -1,0 +1,1 @@
+import{t as e}from"./http-hUM3itQK.js";var t=t=>e.get(`/wx/tags`,{params:{offset:t?.offset||0,limit:t?.limit||100}}),n=t=>e.get(`/wx/tags/${t}`),r=t=>e.post(`/wx/tags`,t),i=(t,n)=>e.put(`/wx/tags/${t}`,n),a=t=>e.delete(`/wx/tags/${t}`);export{i as a,t as i,a as n,n as r,r as t};

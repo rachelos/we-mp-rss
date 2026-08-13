@@ -125,6 +125,10 @@ class _Handler(BaseHTTPRequestHandler):
         path = self.path.split("?")[0].rstrip("/")
         if path in ("/health", ""):
             self._send(200, {"ok": True, "message": "agent alive"})
+        elif path == "/browsers":
+            # 宿主机 OS 上探测已安装浏览器（供容器 /weread/browsers 代理给前端下拉）
+            from core.browser_detect import detect_browsers
+            self._send(200, {"browsers": detect_browsers()})
         elif path == "/refresh":
             self._refresh()
         else:
