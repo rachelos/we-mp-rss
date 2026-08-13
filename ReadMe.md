@@ -221,7 +221,7 @@ The following are the environment variable configurations supported in `config.y
 | `APP_NAME` | `we-mp-rss` | Application name |
 | `SERVER_NAME` | `we-mp-rss` | Server name |
 | `WEB_NAME` | `WeRSS微信公众号订阅助手` | Frontend display name |
-| `SEND_CODE` | `True` | Whether to send authorization QR code notifications |
+| `SEND_CODE` | `False` | Whether to send authorization QR code in expired notification (text-only notification by default) |
 | `CODE_TITLE` | `WeRSS授权二维码` | QR code notification title |
 | `ENABLE_JOB` | `True` | Whether to enable scheduled tasks |
 | `AUTO_RELOAD` | `False` | Auto-restart service on code changes |

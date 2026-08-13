@@ -3,8 +3,90 @@ import core.db as db
 from core.config import cfg
 from core.wait import Wait
 from core.print import print_success,print_error,print_warning
-from core.article_content import build_article_url, sync_article_content
+from core.article_content import (
+    build_article_url,
+    mark_article_fetch_failed,
+    sync_article_content,
+)
 DB=db.Db(tag="内容修正")
+
+
+def recover_stale_fetching_articles(session, now_millis: int = None) -> int:
+    """Release expired or legacy FETCHING locks and account for the failure."""
+    import time
+    from sqlalchemy import case, func, or_
+
+    now_millis = now_millis or int(time.time() * 1000)
+    stale_seconds = int(cfg.get("gather.content_fetch_stale_timeout", 300) or 300)
+    stale_before = now_millis - stale_seconds * 1000
+    max_failures = int(cfg.get("gather.content_max_failures", 3) or 3)
+    next_fail_count = func.coalesce(Article.fix_fail_count, 0) + 1
+
+    recovered = session.query(Article).filter(
+        Article.status == DATA_STATUS.FETCHING,
+        or_(
+            Article.fetch_started_at.is_(None),
+            Article.fetch_started_at < stale_before,
+        ),
+    ).update(
+        {
+            Article.status: case(
+                (next_fail_count >= max_failures, DATA_STATUS.FAILED),
+                else_=DATA_STATUS.ACTIVE,
+            ),
+            Article.fix_fail_count: next_fail_count,
+            Article.fetch_started_at: None,
+        },
+        synchronize_session=False,
+    )
+    session.commit()
+    if recovered:
+        print_warning(f"已恢复 {recovered} 篇陈旧 FETCHING 文章")
+    return recovered
+
+
+def claim_next_article(session, excluded_ids=None, now_millis: int = None):
+    """Atomically claim one article immediately before it is fetched."""
+    import time
+    from sqlalchemy import or_
+
+    excluded_ids = excluded_ids or set()
+    max_failures = int(cfg.get("gather.content_max_failures", 3) or 3)
+
+    while True:
+        query = session.query(Article).filter(
+            Article.has_content == 0,
+            Article.status != DATA_STATUS.FETCHING,
+            Article.status != DATA_STATUS.DELETED,
+            or_(Article.fix_fail_count.is_(None), Article.fix_fail_count < max_failures),
+        )
+        if excluded_ids:
+            query = query.filter(~Article.id.in_(excluded_ids))
+
+        candidate = query.order_by(Article.publish_time.desc()).first()
+        if candidate is None:
+            return None
+
+        claimed = session.query(Article).filter(
+            Article.id == candidate.id,
+            Article.has_content == 0,
+            Article.status == candidate.status,
+            or_(Article.fix_fail_count.is_(None), Article.fix_fail_count < max_failures),
+        ).update(
+            {
+                Article.status: DATA_STATUS.FETCHING,
+                Article.fetch_started_at: now_millis or int(time.time() * 1000),
+            },
+            synchronize_session=False,
+        )
+        session.commit()
+        if claimed:
+            session.expire_all()
+            return session.query(Article).filter(Article.id == candidate.id).first()
+
+        session.expire_all()
+
+
 def fetch_articles_without_content():
     """
     查询content为空的文章，调用微信内容提取方法获取内容并更新数据库
@@ -12,32 +94,20 @@ def fetch_articles_without_content():
     """
     session = DB.get_session()
     try:
-        # 查询content为空且未被锁定的文章
-        from sqlalchemy import or_
-        articles = session.query(Article).filter(
-            or_(Article.has_content==0),
-            Article.status != DATA_STATUS.FETCHING,  # 排除正在获取的文章
-            Article.status != DATA_STATUS.DELETED,  # 已删除文章不再参与自动补抓
-            or_(Article.fix_fail_count.is_(None), Article.fix_fail_count < 3)  # 排除失败3次及以上的文章
-        ).order_by(Article.publish_time.desc()).limit(10).all()
-        
-        if not articles:
-            print_warning("暂无需要获取内容的文章")
-            return
+        recover_stale_fetching_articles(session)
+        batch_size = int(cfg.get("gather.content_batch_size", 5) or 5)
+        processed_ids = set()
 
-        original_status_map = {
-            article.id: article.status for article in articles
-        }
-        
-        # 锁定文章状态，防止其他节点获取
-        article_ids = [a.id for a in articles]
-        session.query(Article).filter(Article.id.in_(article_ids)).update(
-            {Article.status: DATA_STATUS.FETCHING},
-            synchronize_session=False
-        )
-        session.commit()
-        
-        for article in articles:
+        for _ in range(batch_size):
+            article = claim_next_article(session, excluded_ids=processed_ids)
+            if article is None:
+                if not processed_ids:
+                    print_warning("暂无需要获取内容的文章")
+                break
+
+            processed_ids.add(article.id)
+            article_id = article.id
+            article_title = article.title
             try:
                 url = build_article_url(article)
                 print(f"正在处理文章: {article.title}, URL: {url}")
@@ -52,18 +122,16 @@ def fetch_articles_without_content():
                     if article.status == DATA_STATUS.DELETED:
                         print_error(f"获取文章 {article.title} 内容已被发布者删除")
                     else:
-                        print_success(f"成功更新文章 {article.title} 的内容, mode={fetch_mode} url: http://127.0.0.1:8001/views/article/{article.id}")
+                        print_success(f"成功更新文章 {article.title} 的内容, mode={fetch_mode} url: http://127.0.0.1:{cfg.get('port', 8001)}/views/article/{article.id}")
                 else:
-                    # 获取失败，恢复状态以便后续重试
-                    article.status = original_status_map.get(article.id, DATA_STATUS.ACTIVE)
-                    session.commit()
                     print_error(f"获取文章 {article.title} 内容失败, mode={fetch_mode}")
                 Wait(min=5,max=10,tips=f"修正 {article.title}... 完成")
             except Exception as e:
-                # 单篇文章处理失败，恢复状态
-                article.status = original_status_map.get(article.id, DATA_STATUS.ACTIVE)
-                session.commit()
-                print_error(f"处理文章 {article.title} 时发生错误: {e}")
+                session.rollback()
+                article = session.query(Article).filter(Article.id == article_id).first()
+                if article and article.status == DATA_STATUS.FETCHING:
+                    mark_article_fetch_failed(session, article, str(e))
+                print_error(f"处理文章 {article_title} 时发生错误: {e}")
     except Exception as e:
         print_error(f"处理过程中发生错误: {e}")
         raise  # 重新抛出异常，让队列记录错误

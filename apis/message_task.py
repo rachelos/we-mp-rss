@@ -1,3 +1,4 @@
+import asyncio
 from pydantic import BaseModel
 
 # 标准导入分组和顺序
@@ -148,7 +149,7 @@ async def test_message_task(
             articles=mock_articles  # type: ignore
         )
         
-        result = web_hook(test_hook, is_test=True)
+        result = await asyncio.to_thread(web_hook, test_hook, is_test=True)
         
         return success_response(
             data={

@@ -6,10 +6,11 @@ from core.auth import get_current_user_or_ak
 from core.db import DB
 from .base import success_response, error_response,BaseResponse
 from datetime import datetime
-from typing import Optional, List, Literal
+from typing import Optional, List, Literal, Any
 import os
 import threading
 import asyncio
+import zipfile
 from concurrent.futures import ThreadPoolExecutor
 import io
 import uuid
@@ -87,58 +88,235 @@ def _export_articles_worker(
         zip_filename=zip_filename
     )
 
-@router.post("/export/articles", summary="导出文章")
+@router.post("/export/articles", summary="导出文章（异步任务）")
 async def export_articles(
     request: ExportArticlesRequest,
     current_user: dict = Depends(get_current_user_or_ak)
 ):
     """
-    导出文章为多种格式（使用线程池异步处理）
+    异步导出文章，立即返回 job_id，通过 job_id 查询进度或订阅 SSE。
+
+    用法示例：
+    ```
+    POST /api/v1/wx/tools/export/articles
+    Authorization: Bearer {token}
+
+    # 轮询
+    GET /api/v1/wx/tools/export/status?job_id=<job_id>
+
+    # SSE
+    GET /api/v1/wx/tools/export/progress?job_id=<job_id>
+    ```
     """
     try:
-        # 检查是否已有相同 mp_id 的导出任务正在运行
+        # 已有同名导出任务则拒绝，避免并发执行
         for thread in threading.enumerate():
             if thread.name == f"export_articles_{request.mp_id}":
                 return error_response(400, "该公众号的导出任务已在处理中，请勿重复点击")
-                
-        # 直接生成 zip_filename 并返回
+
         docx_path = f"./data/docs/{request.mp_id}/"
         if request.zip_filename:
             zip_file_path = f"{docx_path}{request.zip_filename}"
         else:
             zip_file_path = f"{docx_path}exported_articles_{datetime.now().strftime('%Y%m%d_%H%M%S')}.zip"
-        
-        # 启动后台线程执行导出操作
-        export_thread = threading.Thread(
-            target=_export_articles_worker,
-            args=(
-                request.mp_id,
-                request.doc_id,
-                request.page_size,
-                request.page_count,
-                request.add_title,
-                request.remove_images,
-                request.remove_links,
-                request.export_md,
-                request.export_docx,
-                request.export_json,
-                request.export_csv,
-                request.export_pdf,
-                request.zip_filename
-            ),
-            name=f"export_articles_{request.mp_id}"
+
+        # 注册后台任务并立即返回 job_id
+        from core.export_job import get_export_job_manager
+        user_id = current_user.get("sub") or current_user.get("username") or current_user.get("id") or "unknown"
+        active_fmts = [
+            name for name, enabled in (
+                ("md", request.export_md), ("docx", request.export_docx),
+                ("json", request.export_json), ("csv", request.export_csv),
+                ("pdf", request.export_pdf),
+            ) if enabled
+        ]
+        manager = get_export_job_manager()
+        job = manager.create_job(
+            user_id=str(user_id),
+            mp_id=request.mp_id,
+            fmt_summary="+".join(active_fmts) or "none",
         )
-        export_thread.start()
-        
+        manager.update(job.job_id, stage="queued", message="任务已入队", progress=0,
+                       output_path=zip_file_path)
+
+        def _run() -> None:
+            """后台线程：调用优化版 exporter 并打包。"""
+            try:
+                from core.exporter import _export_articles_optimized
+                from core.db import DB
+                session = DB.get_session()
+
+                def progress_cb(stage: str, message: str, progress: int, **kw: Any) -> None:
+                    manager.update(job.job_id, stage=stage, message=message, progress=progress, **kw)
+
+                # 1) 渲染各类格式文件
+                result = _export_articles_optimized(
+                    session=session,
+                    mp_id=request.mp_id,
+                    doc_id=request.doc_id,
+                    page_size=request.page_size,
+                    page_count=request.page_count,
+                    add_title=request.add_title,
+                    remove_images=request.remove_images,
+                    remove_links=request.remove_links,
+                    export_md=request.export_md,
+                    export_docx=request.export_docx,
+                    export_json=request.export_json,
+                    export_csv=request.export_csv,
+                    export_pdf=request.export_pdf,
+                    docx_path=docx_path,
+                    progress_callback=progress_cb,
+                )
+                processed = result.get("processed", 0)
+                skipped = result.get("skipped", 0)
+
+                # 2) 打包 zip + 删除源文件
+                if processed > 0:
+                    manager.update(job.job_id, stage="packaging", message="正在打包…", progress=92)
+                    try:
+                        final_zip = zip_file_path
+                        if not final_zip.endswith(".zip"):
+                            final_zip += ".zip"
+                        if os.path.exists(final_zip):
+                            os.remove(final_zip)
+                        with zipfile.ZipFile(final_zip, "w", zipfile.ZIP_DEFLATED) as zf:
+                            for root, _, files in os.walk(docx_path):
+                                for f in files:
+                                    if f.endswith(".zip"):
+                                        continue
+                                    fp = os.path.join(root, f)
+                                    arc = os.path.relpath(fp, docx_path)
+                                    zf.write(fp, arc)
+                                    try:
+                                        os.remove(fp)
+                                    except Exception as e:
+                                        print_error(f"删除文件失败 {fp}: {e}")
+                        manager.finish(
+                            job.job_id, ok=True,
+                            message=f"导出完成：共 {processed} 篇（跳过 {skipped} 篇）",
+                            output_path=final_zip,
+                        )
+                    except Exception as e:
+                        manager.finish(job.job_id, ok=False, message=f"打包失败: {e}")
+                else:
+                    manager.finish(
+                        job.job_id, ok=False,
+                        message=f"没有可导出的文章（跳过 {skipped} 篇）",
+                    )
+
+            except Exception as e:
+                manager.finish(job.job_id, ok=False, message=f"后台导出异常: {e}")
+
+        threading.Thread(target=_run, name=f"export_articles_{request.mp_id}", daemon=True).start()
+
+        # 返回时不要泄露服务器绝对路径，只给文件名（下载 API 会基于 mp_id 拼接）
         return success_response({
-            "export_path": zip_file_path,
-            "message": "导出任务已启动，请稍后下载文件"
-        })
-            
+            "job_id": job.job_id,
+            "export_path": os.path.basename(zip_file_path),
+            "mp_id": request.mp_id,
+            "message": "导出任务已启动，请通过 job_id 查询进度或订阅 SSE",
+        }, "导出任务已启动")
+
     except ValueError as e:
         return error_response(400, str(e))
     except Exception as e:
         return error_response(500, f"导出失败: {str(e)}")
+
+
+@router.get("/export/status", summary="查询文章导出任务状态")
+async def export_status(
+    job_id: str,
+    current_user: dict = Depends(get_current_user_or_ak),
+):
+    """根据 job_id 返回当前阶段、消息、进度、总数、已处理数、跳过数。仅 job 所有者可访问。"""
+    from core.export_job import get_export_job_manager
+    job = get_export_job_manager().get_job(job_id)
+    if job is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=error_response(code=40404, message=f"找不到导出任务 {job_id}"),
+        )
+    caller_id = str(
+        current_user.get("sub")
+        or current_user.get("username")
+        or current_user.get("id")
+        or ""
+    )
+    if job.user_id != caller_id:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail=error_response(code=40303, message="无权访问该导出任务"),
+        )
+    return success_response(job.to_dict(), "ok")
+
+
+@router.get("/export/progress", summary="SSE 实时推送文章导出进度")
+async def export_progress(
+    job_id: str,
+    current_user: dict = Depends(get_current_user_or_ak),
+):
+    """Server-Sent Events 流式推送，仅 job 所有者可订阅。
+
+    事件格式（每行 JSON）：
+    ```
+    data: {"job_id":"abc...","stage":"rendering_pdfs","message":"...","progress":40,"total_records":25,"processed_records":8,"skipped_records":2,"ok":null,"started_at":...,"finished_at":null}
+    ```
+    """
+    from core.export_job import get_export_job_manager
+    from fastapi.responses import StreamingResponse
+    import asyncio
+    import json as json_lib
+
+    job = get_export_job_manager().get_job(job_id)
+    if job is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=error_response(code=40404, message=f"找不到导出任务 {job_id}"),
+        )
+    caller_id = str(
+        current_user.get("sub")
+        or current_user.get("username")
+        or current_user.get("id")
+        or ""
+    )
+    if job.user_id != caller_id:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail=error_response(code=40303, message="无权订阅该导出任务进度"),
+        )
+
+    async def event_stream():
+        try:
+            manager = get_export_job_manager()
+            q = await manager.subscribe(job_id)
+        except KeyError:
+            yield "event: error\ndata: {\"message\":\"job not found\"}\n\n"
+            return
+        try:
+            while True:
+                try:
+                    snap = await asyncio.wait_for(q.get(), timeout=15.0)
+                except asyncio.TimeoutError:
+                    yield "event: ping\ndata: {}\n\n"
+                    continue
+                yield f"data: {json_lib.dumps(snap, ensure_ascii=False)}\n\n"
+                if snap.get("finished_at") is not None:
+                    break
+        finally:
+            try:
+                get_export_job_manager().unsubscribe(job_id, q)
+            except Exception:
+                pass
+
+    return StreamingResponse(
+        event_stream(),
+        media_type="text/event-stream",
+        headers={
+            "Cache-Control": "no-cache",
+            "X-Accel-Buffering": "no",
+            "Connection": "keep-alive",
+        },
+    )
 
 @router.get("/export/download", summary="下载导出文件")
 async def download_export_file(

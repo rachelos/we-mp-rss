@@ -24,7 +24,8 @@ def send_wechat_message(webhook_url, title, text):
         response = requests.post(
             url=webhook_url,
             headers=headers,
-            data=json.dumps(data)
+            data=json.dumps(data),
+            timeout=30
         )
         print(response.text)
     except Exception as e:

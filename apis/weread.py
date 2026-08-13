@@ -11,8 +11,9 @@ from pydantic import BaseModel
 from typing import Optional
 
 from .base import success_response, error_response
-from core.auth import get_current_user_or_ak
 from core.config import Config, cfg as app_cfg
+from core.auth import get_current_user_or_ak, get_current_user
+from driver.weread_qr import WereadQRLogin
 
 router = APIRouter(prefix="/weread", tags=["微信读书"])
 
@@ -368,3 +369,70 @@ async def clear_weread_cookie(current_user=Depends(get_current_user_or_ak)):
     _save_weread_data(data)
 
     return success_response(message="Cookie 已清除")
+
+
+# ---- 微信读书扫码授权 API ----
+
+def _weread_qr_callback(result: dict):
+    """
+    扫码成功后的回调：将 Cookie 保存到 data/wx.lic
+    此函数由 driver/weread_qr.py 在登录成功时自动调用
+    """
+    pass  # 保存逻辑已在 WereadQRLogin._save_cookies_to_lic 中实现
+
+
+@router.get("/qr/code", summary="获取微信读书登录二维码")
+async def get_weread_qrcode(current_user=Depends(get_current_user)):
+    """
+    获取微信读书扫码登录二维码
+    返回二维码图片 URL（本地静态路径或外部链接）
+    """
+    wr_qr = WereadQRLogin()
+
+    def on_login_success(result: dict):
+        """登录成功回调"""
+        print("Weread QR 登录成功，Cookie 已自动保存")
+        _weread_qr_callback(result)
+
+    code_url = wr_qr.GetCode(CallBack=on_login_success)
+    if not code_url:
+        return error_response(500, "获取二维码失败，请稍后重试")
+
+    # 如果是本地文件路径，转为前端可访问的 /static/ 路径
+    if code_url.startswith("static/") or code_url.startswith("./static/"):
+        code_url = "/" + code_url.lstrip("./")
+
+    return success_response({"code": code_url, "uid": wr_qr._uid})
+
+
+@router.get("/qr/image", summary="获取微信读书二维码图片状态")
+async def weread_qr_image(current_user=Depends(get_current_user)):
+    """检查二维码图片是否存在"""
+    wr_qr = WereadQRLogin()
+    return success_response(wr_qr.GetHasCode())
+
+
+@router.get("/qr/status", summary="获取微信读书扫码状态")
+async def weread_qr_status(current_user=Depends(get_current_user)):
+    """
+    轮询微信读书扫码登录状态
+
+    返回:
+    - login_status: bool - 是否登录成功
+    - code_url: str - 二维码 URL
+    - msg: str - 状态消息
+    - data: dict - 登录数据（成功后包含 vid, accessToken, cookies 等）
+    """
+    wr_qr = WereadQRLogin()
+    status = wr_qr.QrStatus()
+    return success_response(status)
+
+
+@router.get("/qr/over", summary="微信读书扫码完成")
+async def weread_qr_over(current_user=Depends(get_current_user)):
+    """
+    扫码登录完成后调用，清理状态并返回登录结果
+    """
+    wr_qr = WereadQRLogin()
+    result = await wr_qr.Close()
+    return success_response(result)

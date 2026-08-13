@@ -6,6 +6,7 @@ import json
 from typing import Callable, Any, Optional
 from datetime import datetime
 from dataclasses import dataclass, field, asdict
+from concurrent.futures import ThreadPoolExecutor, TimeoutError as FutureTimeoutError
 from core.print import print_error, print_info, print_warning, print_success
 
 # Redis 键前缀 - 主队列（文章列表采集）
@@ -368,9 +369,16 @@ class TaskQueueManager:
                 max_retries=max_retries
             ))
             
-            # 保存到 Redis
-            self._save_pending_to_redis()
-            self._save_status_to_redis()
+            # 优化：只追加新任务到 Redis，而不是全量重写
+            redis_client = _get_redis()
+            if redis_client:
+                try:
+                    new_item = self._pending_items[-1].to_dict()
+                    redis_client.rpush(self._redis_keys['pending'], json.dumps(new_item, ensure_ascii=False))
+                    # 只更新计数，不保存完整状态
+                    redis_client.hincrby(self._redis_keys['status'], 'pending_count', 1)
+                except Exception as e:
+                    print_error(f"追加任务到 Redis 失败: {e}")
             
             # 标记需要广播，但不在这里执行（避免在锁内进行异步操作）
             broadcast_needed = True
@@ -450,7 +458,15 @@ class TaskQueueManager:
                         try:
                             # 记录任务开始时间
                             start_time = time.time()
-                            task(*args, **kwargs)
+                            task_executor = ThreadPoolExecutor(max_workers=1)
+                            try:
+                                future = task_executor.submit(task, *args, **kwargs)
+                                future.result(timeout=600)
+                            except FutureTimeoutError:
+                                print_error("Task [{}] execution timeout (10 min)".format(task_name))
+                                raise Exception("Task timed out after 600s")
+                            finally:
+                                task_executor.shutdown(wait=False)
                             # 记录任务执行时间
                             duration = time.time() - start_time
                             

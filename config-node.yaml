@@ -4,8 +4,8 @@ server:
    name: ${SERVER_NAME:-we-mp-rss}
    #前端显示名称
    web_name: ${WEB_NAME:-WeRSS微信公众号订阅助手}
-   #过期是否发送授权二维通知 默认True
-   send_code: ${SEND_CODE:-True}
+   #过期是否发送授权二维码通知 默认False，设为True时通知中附带二维码
+   send_code: ${SEND_CODE:-False}
    #二维通知标题
    code_title: ${CODE_TITLE:-WeRSS}
    #启动JOB定时任务，默认为True
@@ -16,8 +16,8 @@ server:
    threads: ${THREADS:-1}
    #通过web方式授权二维码 默认False 
    auth_web: ${WERSS_AUTH_WEB:-False}
-   #是否发送授权二维通知 默认True
-   send_code: ${WERSS_SEND_CODE:-True}
+   #是否发送授权二维码通知 默认False，设为True时通知中附带二维码
+   send_code: ${WERSS_SEND_CODE:-False}
 
 
 #数据库连接 例如db:  mysql+pymysql://<username>:<password>@<host>/we-rss?charset=utf8mb4

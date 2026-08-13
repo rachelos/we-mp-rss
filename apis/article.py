@@ -15,7 +15,6 @@ from core.print import print_warning, print_info, print_error, print_success
 from core.cache import clear_cache_pattern
 from tools.fix import fix_article
 from core.article_content import sync_article_content
-from driver.wxarticle import WXArticleFetcher
 router = APIRouter(prefix=f"/articles", tags=["文章管理"])
 
 _refresh_tasks = {}
@@ -38,13 +37,11 @@ def _get_active_refresh_task(article_id: str):
 
 
 def _run_refresh_article_task_wrapper(task_id: str, article_id: str):
-    """包装器:在线程中运行 async 函数"""
-    import asyncio
-    asyncio.run(_run_refresh_article_task(task_id, article_id))
+    _run_refresh_article_task(task_id, article_id)
 
-async def _run_refresh_article_task(task_id: str, article_id: str):
+
+def _run_refresh_article_task(task_id: str, article_id: str):
     session = DB.get_session()
-    fetcher = None
     try:
         _set_refresh_task(task_id, {
             "task_id": task_id,
@@ -63,48 +60,26 @@ async def _run_refresh_article_task(task_id: str, article_id: str):
             })
             return
 
-        target_url = (article.url or "").strip()
-        if not target_url:
+        updated, fetch_mode = sync_article_content(
+            session=session,
+            article=article,
+            preferred_mode=cfg.get("gather.content_mode", "web"),
+            force=True,
+        )
+        if not updated:
             _set_refresh_task(task_id, {
                 "task_id": task_id,
                 "article_id": article_id,
                 "status": "failed",
-                "message": "文章缺少可抓取链接"
+                "message": f"文章刷新失败: {fetch_mode}"
             })
             return
-
-        fetcher = WXArticleFetcher()
-        fetched = await fetcher.get_article_content(target_url)
-        fetched_content = fetched.get("content")
-        article.show_type=fetched.get("article_type",article.show_type )
-        if fetched_content != "DELETED" and not fetched_content:
-            fetch_error = fetched.get("fetch_error") or "文章内容抓取为空"
-            _set_refresh_task(task_id, {
-                "task_id": task_id,
-                "article_id": article_id,
-                "status": "failed",
-                "message": f"文章刷新失败: {fetch_error}"
-            })
-            return
-
-        article.title = fetched.get("title") or article.title
-        article.url = target_url
-        article.publish_time = fetched.get("publish_time") or article.publish_time
-        article.content = fetched_content if fetched_content is not None else article.content
-        if fetched_content == "DELETED":
-            article.description = fetched.get("description") or article.description
-        else:
-            article.description = fetched.get("description") or article.description
-        article.pic_url = fetched.get("topic_image") or fetched.get("pic_url") or article.pic_url
-        article.status = DATA_STATUS.DELETED if fetched_content == "DELETED" else DATA_STATUS.ACTIVE
-        # 更新 has_content 字段
-        article.has_content = 1 if (article.content and article.content.strip()) else 0
 
         now_seconds = int(time.time())
-        now_millis = int(time.time() * 1000)
         article.updated_at = now_seconds
-        article.updated_at_millis = now_millis
+        article.updated_at_millis = int(time.time() * 1000)
         session.commit()
+        session.refresh(article)
 
         clear_cache_pattern("articles_list")
         clear_cache_pattern("article_detail")
@@ -115,7 +90,12 @@ async def _run_refresh_article_task(task_id: str, article_id: str):
             "task_id": task_id,
             "article_id": article_id,
             "status": "success",
-            "message": "文章刷新成功",
+            "message": (
+                "文章已被发布者删除"
+                if article.status == DATA_STATUS.DELETED
+                else "文章刷新成功"
+            ),
+            "fetch_mode": fetch_mode,
             "updated_at": now_seconds
         })
     except Exception as e:
@@ -167,6 +147,8 @@ async def clean_orphan_articles(
                 message="清理无效文章失败"
             )
         )
+    finally:
+        session.close()
 
 
 @router.delete("/clean-old", summary="清理指定天数前的旧文章")

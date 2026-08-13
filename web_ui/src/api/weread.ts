@@ -58,3 +58,20 @@ export async function collectWereadNotes(params: {
 export async function clearWereadCookie() {
     return http.delete('/wx/weread/cookie')
 }
+
+// ---- 扫码授权 ----
+
+/** 获取微信读书扫码登录二维码 */
+export async function getWereadQrCode() {
+    return http.get('weread/qr/code')
+}
+
+/** 检查微信读书扫码登录状态 */
+export async function checkWereadQrStatus() {
+    return http.get('weread/qr/status')
+}
+
+/** 完成微信读书扫码登录 */
+export async function completeWereadQrLogin() {
+    return http.get('weread/qr/over')
+}

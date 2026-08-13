@@ -69,6 +69,9 @@ class Db:
                 @event.listens_for(self.engine, "connect")
                 def set_sqlite_text_factory(dbapi_conn, connection_record):
                     # 将无效 UTF-8 字符替换为 �
+                    dbapi_conn.execute("PRAGMA journal_mode=WAL")
+                    dbapi_conn.execute("PRAGMA busy_timeout=10000")
+                    dbapi_conn.execute("PRAGMA synchronous=NORMAL")
                     dbapi_conn.text_factory = lambda x: x.decode('utf-8', errors='replace')
             
             self.session_factory=self.get_session_factory()
@@ -90,6 +93,9 @@ class Db:
 
             if "has_content" not in columns:
                 alter_statements.append("ALTER TABLE articles ADD COLUMN has_content INTEGER DEFAULT 0")
+
+            if "fetch_started_at" not in columns:
+                alter_statements.append("ALTER TABLE articles ADD COLUMN fetch_started_at BIGINT")
 
             if not alter_statements:
                 return
@@ -123,6 +129,7 @@ class Db:
     def __exit__(self, exc_type, exc_val, exc_tb):
         self.close()
     def delete_article(self,article_data:dict)->bool:
+        session = None
         try:
             art = Article(**article_data)
             if art.id: # type: ignore
@@ -136,9 +143,13 @@ class Db:
         except Exception as e:
             print_error(f"delete article:{str(e)}")
             pass      
+        finally:
+            if session is not None:
+                session.close()
         return False
      
     def add_article(self, article_data: dict,check_exist=True) -> bool:
+        session = None
         try:
             session=self.get_session()
             from datetime import datetime
@@ -194,48 +205,70 @@ class Db:
             session.add(art)
             print_info(f"Added article: {art.id}")
             sta=session.commit()
+            return True
         except Exception as e:
-            session.rollback()  # 回滚事务，确保session状态正常
+            if session:
+                session.rollback()  # 回滚事务，确保session状态正常
             if "UNIQUE" in str(e) or "Duplicate entry" in str(e):
                 print_warning(f"Article already exists: {art.id}")
             else:
                 print_error(f"Failed to add article: {e}")
             return False
-        return True    
-        
+        finally:
+            if session is not None:
+                session.close()
     def get_articles(self, id:str=None, limit:int=30, offset:int=0) -> List[Article]: # type: ignore
+        session = None
         try:
-            data = self.get_session().query(Article).limit(limit).offset(offset)
+            session = self.get_session()
+            data = session.query(Article).limit(limit).offset(offset)
             return data
         except Exception as e:
             print(f"Failed to fetch Feed: {e}")
             return e # type: ignore   
+        finally:
+            if session is not None:
+                session.close()
              
     def get_all_mps(self) -> List[Feed]:
         """Get all Feed records"""
+        session = None
         try:
-            return self.get_session().query(Feed).all()
+            session = self.get_session()
+            return session.query(Feed).filter(Feed.status == 1, Feed.faker_id != "MP_WXS_FEATURED_ARTICLES").all()
         except Exception as e:
             print(f"Failed to fetch Feed: {e}")
             return e # type: ignore
+        finally:
+            if session is not None:
+                session.close()
             
     def get_mps_list(self, mp_ids:str) -> List[Feed]:
+        session = None
         try:
             ids=mp_ids.split(',')
-            data =  self.get_session().query(Feed).filter(Feed.id.in_(ids)).all()
+            session = self.get_session()
+            data = session.query(Feed).filter(Feed.id.in_(ids)).all()
             return data
         except Exception as e:
             print(f"Failed to fetch Feed: {e}")
             return e # type: ignore
+        finally:
+            if session is not None:
+                session.close()
     def get_mps(self, mp_id:str) -> Optional[Feed]:
+        session = None
         try:
             ids=mp_id.split(',')
-            data =  self.get_session().query(Feed).filter_by(id= mp_id).first()
+            session = self.get_session()
+            data = session.query(Feed).filter_by(id= mp_id).first()
             return data
         except Exception as e:
             print(f"Failed to fetch Feed: {e}")
             return e # type: ignore
-
+        finally:
+            if session is not None:
+                session.close()
     def get_faker_id(self, mp_id:str):
         data = self.get_mps(mp_id)
         return data.faker_id # type: ignore

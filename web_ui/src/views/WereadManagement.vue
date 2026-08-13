@@ -70,6 +70,10 @@
             <template #icon><icon-save /></template>
             保存 Cookie
           </a-button>
+          <a-button type="outline" status="success" @click="showQrAuth">
+            <template #icon><icon-scan /></template>
+            扫码授权
+          </a-button>
           <a-button @click="testConnection" :loading="testing">
             <template #icon><icon-check-circle /></template>
             测试连接
@@ -148,6 +152,13 @@
         <template #subtitle>{{ collectResult.subtitle }}</template>
       </a-result>
     </a-modal>
+
+    <!-- 扫码授权弹窗 -->
+    <WereadAuthQrcode
+      ref="wereadQrRef"
+      @success="handleWereadQrSuccess"
+      @cancel="handleWereadQrCancel"
+    />
   </div>
 </template>
 
@@ -165,6 +176,7 @@ import {
   collectWereadNotes,
   clearWereadCookie,
 } from '@/api/weread'
+import WereadAuthQrcode from '@/components/WereadAuthQrcode.vue'
 
 // 状态
 const connectionStatus = ref<'idle' | 'loading' | 'success' | 'error'>('idle')
@@ -205,6 +217,24 @@ interface Book {
   finishedDate: number
 }
 const bookshelf = ref<Book[]>([])
+
+// 扫码授权
+const wereadQrRef = ref()
+
+function showQrAuth() {
+  wereadQrRef.value?.startAuth()
+}
+
+async function handleWereadQrSuccess(result: any) {
+  // 扫码成功后刷新状态
+  await loadStatus()
+  await testConnection()
+  Message.success(`微信读书授权成功，用户 VID: ${result?.vid || ''}`)
+}
+
+function handleWereadQrCancel() {
+  // 用户取消扫码，无需额外处理
+}
 
 // 采集结果
 const collectResult = reactive({
@@ -380,7 +410,7 @@ async function loadBookshelf() {
   }
 }
 
-async function clearCookieHandler() {
+async function clearCookie() {
   try {
     await clearWereadCookie()
     Message.success('Cookie 已清除')

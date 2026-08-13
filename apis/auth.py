@@ -21,6 +21,8 @@ from .ver import API_VERSION
 from .base import success_response, error_response
 from driver.base import WX_API
 from core.config import set_config, cfg
+from core.print import print_warning
+from core.switch_job import get_manager as get_switch_job_manager
 from pydantic import BaseModel
 from typing import Optional
 
@@ -424,27 +426,213 @@ async def reset_password(req: ResetPasswordRequest):
         )
 
 
-@router.post("/switch", summary="切换微信账号")
-async def switch_wechat_account(current_user: dict = Depends(get_current_user)):
+@router.post("/switch", summary="切换微信账号（异步任务）")
+async def switch_wechat_account(
+    current_user: dict = Depends(get_current_user),
+    username: str = "",
+):
     """
-    切换微信公众号账号
-    
+    异步触发切换微信公众号账号，立即返回 job_id。
+
     用法示例：
     ```
-    POST /api/v1/auth/switch
+    POST /api/v1/auth/switch?username=
     Authorization: Bearer {token}
+
+    # 轮询进度
+    GET /api/v1/auth/switch/status?job_id=<job_id>
+
+    # SSE 实时推送
+    GET /api/v1/auth/switch/progress?job_id=<job_id>
+    ```
+
+    设计要点：
+    * 实际切换流程（启动浏览器、点击切换按钮、轮询等待）可能耗时 30~120 秒，
+      因此改在后台线程执行；HTTP 接口立即返回。
+    * 切换期间已自动暂停抓取 / 内容任务队列，结束后自动恢复。
+    * Token 失效时立即返回 ok=false 与阶段消息，前端可据此引导用户重新扫码。
+    """
+    import asyncio
+    user_id = current_user.get("sub") or current_user.get("username") or current_user.get("id") or "unknown"
+    manager = get_switch_job_manager()
+    job = manager.create_job(user_id=str(user_id), target_username=username)
+    manager.update(job.job_id, stage="queued", message="已入队，准备启动切换任务", progress=0)
+
+    def _run_in_thread() -> None:
+        """在新线程中跑同步包装，确保 HTTP 立即返回。"""
+        import threading
+        def _target() -> None:
+            try:
+                loop = asyncio.new_event_loop()
+                asyncio.set_event_loop(loop)
+                # Windows 需要 ProactorEventLoop 给 Playwright 用
+                import sys
+                if sys.platform == "win32":
+                    asyncio.set_event_loop_policy(asyncio.WindowsProactorEventLoopPolicy())
+                try:
+                    def progress_callback(stage: str, message: str, progress: int) -> None:
+                        manager.update(job.job_id, stage=stage, message=message, progress=progress)
+                    result = loop.run_until_complete(
+                        WX_API.switch_account(username=username, progress_callback=progress_callback)
+                    )
+                    manager.finish(job.job_id, ok=bool(result), message=("切换成功" if result else "切换失败，详情请查看日志"))
+                finally:
+                    try:
+                        loop.close()
+                    except Exception:
+                        pass
+            except Exception as e:
+                manager.finish(job.job_id, ok=False, message=f"后台任务异常: {e}")
+        threading.Thread(target=_target, daemon=True).start()
+
+    _run_in_thread()
+    return success_response(job.to_dict(), "切换任务已启动，可通过 job_id 查询进度")
+
+
+@router.get("/switch/status", summary="查询切换账号任务状态")
+async def switch_status(
+    job_id: str,
+    current_user: dict = Depends(get_current_user),
+):
+    """根据 job_id 返回当前阶段、消息、进度、是否完成。仅 job 所有者可访问。"""
+    job = get_switch_job_manager().get_job(job_id)
+    if job is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=error_response(code=40404, message=f"找不到切换任务 {job_id}"),
+        )
+    caller_id = str(
+        current_user.get("sub")
+        or current_user.get("username")
+        or current_user.get("id")
+        or ""
+    )
+    if job.user_id != caller_id:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail=error_response(code=40303, message="无权访问该切换任务"),
+        )
+    return success_response(job.to_dict(), "ok")
+
+
+@router.get("/switch/progress", summary="SSE 实时推送切换账号进度")
+async def switch_progress(
+    job_id: str,
+    current_user: dict = Depends(get_current_user),
+):
+    """Server-Sent Events 流式推送，仅 job 所有者可订阅。
+
+    事件格式（每行 JSON）：
+    ```
+    data: {"job_id":"abc...","stage":"clicking","message":"...","progress":65,"ok":null,"started_at":...,"finished_at":null}
     ```
     """
     import asyncio
+    import json
+    from fastapi.responses import StreamingResponse
 
+    # 先做鉴权 + 所有权校验，避免给未授权 SSE 长连接
+    job = get_switch_job_manager().get_job(job_id)
+    if job is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=error_response(code=40404, message=f"找不到切换任务 {job_id}"),
+        )
+    caller_id = str(
+        current_user.get("sub")
+        or current_user.get("username")
+        or current_user.get("id")
+        or ""
+    )
+    if job.user_id != caller_id:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail=error_response(code=40303, message="无权订阅该切换任务进度"),
+        )
+
+    async def event_stream():
+        try:
+            manager = get_switch_job_manager()
+            q = await manager.subscribe(job_id)
+        except KeyError:
+            yield "event: error\ndata: {\"message\":\"job not found\"}\n\n"
+            return
+        try:
+            while True:
+                try:
+                    snap = await asyncio.wait_for(q.get(), timeout=15.0)
+                except asyncio.TimeoutError:
+                    # 心跳保活
+                    yield "event: ping\ndata: {}\n\n"
+                    continue
+                yield f"data: {json.dumps(snap, ensure_ascii=False)}\n\n"
+                if snap.get("finished_at") is not None:
+                    break
+        finally:
+            try:
+                get_switch_job_manager().unsubscribe(job_id, q)
+            except Exception:
+                pass
+
+    return StreamingResponse(
+        event_stream(),
+        media_type="text/event-stream",
+        headers={
+            "Cache-Control": "no-cache",
+            "X-Accel-Buffering": "no",
+            "Connection": "keep-alive",
+        },
+    )
+
+
+@router.post("/wechat/unbind", summary="解除微信授权")
+async def unbind_wechat(current_user: dict = Depends(get_current_user)):
+    """
+    解除当前已绑定的微信公众号授权，删除本地 token 与 Redis 缓存。
+
+    用法示例：
+    ```
+    POST /api/v1/auth/wechat/unbind
+    Authorization: Bearer {token}
+    ```
+
+    解除后下次调用 `/api/v1/auth/qr/code` 时会自动引导重新扫码授权。
+    """
     try:
-        # 调用切换账号方法（异步）
-        result = await WX_API.switch_account()
-        return success_response(result, "切换账号成功" if result else "切换账号失败")
+        # 1. 清除本地 token 文件
+        from driver.token import wx_cfg
+        wx_cfg.set("token_data", {})
+        wx_cfg.save_config()
+        wx_cfg.reload()
+
+        # 2. 清除 Redis 中的 token 与登录状态（仅作用于 werss 前缀键）
+        from core.redis_client import redis_client
+        cleared_keys: list = []
+        if redis_client.is_connected:
+            try:
+                for key in redis_client._client.keys("werss:token:*"):
+                    redis_client._client.delete(key)
+                    cleared_keys.append(key.decode() if isinstance(key, bytes) else key)
+                redis_client._client.set("werss:login:status", "0")
+            except Exception as e:
+                print_warning(f"清理 Redis token 时出错: {e}")
+
+        # 3. 同步全局登录状态（内存回退）
+        from driver.success import setStatus
+        setStatus(False)
+
+        return success_response(
+            {
+                "cleared_local_token": True,
+                "cleared_redis_keys": cleared_keys,
+                "next_step": "请重新扫码授权",
+            },
+            "微信授权已解除",
+        )
     except HTTPException:
         raise
     except Exception as e:
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=error_response(code=50001, message=f"切换账号失败: {str(e)}")
+            detail=error_response(code=50002, message=f"解除微信授权失败: {str(e)}"),
         )

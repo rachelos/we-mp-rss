@@ -30,8 +30,7 @@ class AntiCrawlerConfig:
             "zh-CN,zh;q=0.9,en;q=0.8",
             "zh-CN,zh;q=0.8,zh-TW;q=0.7,zh-HK;q=0.5,en-US;q=0.3,en;q=0.2",
             "zh-CN,zh;q=0.9,en-US;q=0.8,en;q=0.7"
-        ],
-        'cache_control': ["no-cache", "max-age=0", "no-store"]
+        ]
     }
     
     # 时区配置
@@ -94,8 +93,11 @@ class AntiCrawlerConfig:
             "Accept": random.choice(self.HEADERS['accept']),
             "Accept-Language": random.choice(self.HEADERS['accept_language']),
             "Accept-Encoding": "gzip, deflate, br",
-            "Cache-Control": random.choice(self.HEADERS['cache_control']),
-            "Upgrade-Insecure-Requests": "1",
+            # 注意：不能设置 Cache-Control 和 Upgrade-Insecure-Requests。
+            # extra_http_headers 会作用于页面发出的所有请求（包括XHR），
+            # 而真实浏览器只在页面导航请求上带这两个头；
+            # 带上后 mp.weixin.qq.com 登录页初始化失败，
+            # #app 一直保持 visibility:hidden，登录二维码无法加载
             "Sec-Fetch-Dest": "document",
             "Sec-Fetch-Mode": "navigate",
             "Sec-Fetch-Site": "none",

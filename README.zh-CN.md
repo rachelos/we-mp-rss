@@ -171,7 +171,7 @@ http://localhost:3000
 | `WEB_NAME` | `WeRSS微信公众号订阅助手` | 前端显示名称 |
 | `WERSS_AUTH_WEB` | `False` | 通过web方式授权 |
 | `BROWSER_TYPE` | `firefox` | 浏览器类型默认firefox |
-| `SEND_CODE` | `True` | 是否发送授权二维码通知 |
+| `SEND_CODE` | `False` | 过期通知中是否附带授权二维码（默认仅发送文字通知） |
 | `CODE_TITLE` | `WeRSS授权二维码` | 二维码通知标题 |
 | `ENABLE_JOB` | `True` | 是否启用定时任务 |
 | `AUTO_RELOAD` | `False` | 代码修改自动重启服务 |

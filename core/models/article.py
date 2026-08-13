@@ -40,6 +40,7 @@ class ArticleBase(Base):
     is_favorite = Column(Integer, default=0)  # 是否收藏
     fix_fail_count = Column(Integer, default=0)  # 修正内容失败次数
     has_content = Column(Integer, default=0, index=True)  # 是否有正文内容（0=无，1=有），用于加速查询
+    fetch_started_at = Column(BigInteger)  # 正文抓取认领时间（Unix毫秒），用于恢复陈旧锁
 class Article(ArticleBase):
     content = Column(Text)
     content_html = Column(Text)
@@ -82,5 +83,6 @@ class Article(ArticleBase):
             'is_read': self.is_read,
             'is_favorite': self.is_favorite,
             'fix_fail_count': self.fix_fail_count,
-            'has_content': self.has_content
+            'has_content': self.has_content,
+            'fetch_started_at': self.fetch_started_at
         }

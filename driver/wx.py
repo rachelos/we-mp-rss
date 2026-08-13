@@ -82,14 +82,25 @@ class Wx:
         except Exception as e:
             print(f"提取token时出错: {str(e)}")
             return ''
-    async def switch_account(self, username: str = ""):
+    async def switch_account(self, username: str = "", progress_callback=None):
         """切换账号功能（异步）
+
         Args:
             username: 目标账号的用户名，如果为空则切换到其他可用账号
+            progress_callback: 可选回调，签名 ``callback(stage: str, message: str, progress: int) -> None``，
+                用于将进度广播到前端（SSE / 轮询）。
         """
         import asyncio
 
+        def report(stage: str, message: str, progress: int = 0) -> None:
+            if progress_callback is not None:
+                try:
+                    progress_callback(stage, message, progress)
+                except Exception:
+                    pass
+
         print("开始切换账号...")
+        report("queued", "任务开始", 0)
         main_queue_was_running = False
         content_queue_was_running = False
 
@@ -99,6 +110,7 @@ class Wx:
             main_queue_was_running = TaskQueue._is_running
             content_queue_was_running = ContentTaskQueue._is_running
 
+            report("stopping_queues", "暂停抓取队列", 5)
             # 停止队列
             if main_queue_was_running:
                 print_info("暂停主任务队列...")
@@ -107,8 +119,12 @@ class Wx:
                 print_info("暂停内容任务队列...")
                 ContentTaskQueue.stop()
 
-            # 等待当前任务真正完成
-            max_wait = 120  # 最大等待120秒
+            # 等待当前任务真正完成 — 通过配置可缩短；默认仍 120s 以保证抓取原子性
+            import os
+            try:
+                max_wait = int(os.getenv("SWITCH_MAX_WAIT", "120"))
+            except Exception:
+                max_wait = 120
             wait_interval = 1
             waited = 0
 
@@ -129,44 +145,63 @@ class Wx:
                     print_success("所有任务已完成，可以安全切换账号")
                     break
 
+                if waited % 5 == 0 and waited > 0:
+                    report("stopping_queues", f"等待任务完成中（{waited}/{max_wait}s）", 5 + min(20, waited // 6))
                 await asyncio.sleep(wait_interval)
                 waited += wait_interval
-                if waited % 5 == 0:
-                    print_info(f"等待任务完成中... ({waited}秒)")
 
             if waited >= max_wait:
                 print_warning("等待超时，仍有任务未完成，切换账号可能导致会话失效")
+                report("stopping_queues", f"队列等待超时，继续尝试（{waited}s）", 25)
 
+            report("checking_token", "检查 Token 有效性", 30)
             await self.Token(isClose=False)
             if getStatus() is False:
-                await self.Close()
+                # 提前暴露结果，不阻塞 60s；让前端用 UI 引导用户重新扫码
+                print_warning("Token 已过期，请重新扫码登录")
                 from jobs.failauth import send_wx_code
                 send_wx_code("账号过期，请重新扫码登录")
-                await asyncio.sleep(60)
+                report("failed", "Token 已过期，请调用 /auth/wechat/unbind 后重新扫码", 100)
                 return False
             await asyncio.sleep(1)
 
-            # 检查 controller 和 Page 对象是否有效
+            # 检查 controller 和 Page 对象是否有效；若不存在则回退到重新启动浏览器
             if not hasattr(self, 'controller') or self.controller is None:
-                print_error("Controller 未初始化，无法切换账号")
-                return False
+                print_warning("Controller 未初始化，正在重新创建浏览器...")
+                self.controller = PlaywrightController()
 
-            if not self.controller.is_page_valid():
-                print_error("Page 对象无效，无法切换账号")
-                return False
+            if not self.controller.is_page_valid() or self.controller.page is None:
+                report("starting_browser", "浏览器 Page 无效，正在重新打开公众平台…", 40)
+                print_warning("Page 对象无效或为 None，正在重新打开浏览器并导航到公众平台...")
+                try:
+                    await self.controller.start_browser()
+                    await self.controller.open_url(self.WX_LOGIN)
+                    # 网络空闲等待超时后继续；后续点击操作再处理是否需要登录
+                    try:
+                        await self.controller.page.wait_for_load_state("networkidle", timeout=10000)
+                    except Exception:
+                        pass
+                    await asyncio.sleep(2)
+                except Exception as e:
+                    print_error(f"重新打开浏览器失败: {str(e)}，无法切换账号")
+                    report("failed", f"启动浏览器失败: {e}", 100)
+                    return False
 
             page = self.controller.page
             if page is None:
-                print_error("Page 对象为 None，无法切换账号")
+                print_error("Page 对象仍为 None，无法切换账号")
+                report("failed", "无法获取 Page 对象", 100)
                 return False
 
             # 等待页面加载完成，添加异常处理
+            report("starting_browser", "等待公众平台首页加载…", 55)
             try:
                 await page.wait_for_load_state("networkidle", timeout=10000)
             except Exception as e:
                 print_warning(f"等待页面加载状态失败: {str(e)}，继续尝试切换账号...")
 
             # 点击账号信息区域打开账号面板
+            report("clicking", "打开账号面板…", 65)
             account_info = page.locator(".weui-desktop-account__info")
             if await account_info.count() > 0:
                 await account_info.click()
@@ -192,6 +227,7 @@ class Wx:
                             print(f"当前一共有{account_count}个可切换账号")
                             import random
                             if account_count > 0:
+                                report("clicking", f"找到 {account_count} 个可切换账号，正在选择…", 75)
                                 # 点击第一个可切换的账号
                                 random_index = random.randint(0, account_count - 1)
                                 await asyncio.sleep(1)
@@ -225,36 +261,38 @@ class Wx:
                                     pass
                                 # 添加延迟，避免 Playwright memoryview 缓冲区问题
                                 await asyncio.sleep(0.5)
-                                # 注意：切换成功后不立即关闭浏览器，让新的session有时间稳定
-                                # await self.Close()  # 移除此行，避免过早关闭导致session失效
                                 sys_notice(f"账号切换成功\n- 账号名称: {account_name} \n- 账号ID: {account_id} \n - Token: {token} \n- 过期时间: {exp_time}", str(cfg.get("server.code_title","WeRss账号切换成功")))
+                                report("done", f"切换成功：{account_name}", 100)
                                 return True
                             else:
                                 print_warning("没有找到可切换的账号")
+                                report("failed", "没有可切换的账号（只剩当前登录账号）", 100)
                                 return False
                         except Exception as e:
                             print_error(f"切换账号时发生错误: {str(e)}")
+                            report("failed", f"切换错误: {e}", 100)
                             return False
                     else:
                         print_warning("未找到切换账号按钮")
+                        report("failed", "未找到切换账号按钮（公众平台改版？）", 100)
                         return False
                 else:
                     print_warning("账号面板未打开")
+                    report("failed", "账号面板未打开", 100)
                     return False
             else:
                 print_warning("未找到账号信息区域")
-                raise Exception("未找到账号信息区域，无法切换账号")
+                # 选择器 miss：兜底触发 QR 流（仅本地接口返回 ok=False，让前端引导重新扫码）
+                report("failed", "未找到账号信息区域，请重新扫码授权", 100)
                 return False
 
         except Exception as e:
             print_error(f"切换账号时发生错误: {str(e)}")
+            report("failed", f"切换错误: {e}", 100)
             return False
         finally:
             # 恢复任务队列
             try:
-                  # 切换失败时清理资源
-                self.cleanup_resources()
-                await self.Close()
                 from core.queue import TaskQueue, ContentTaskQueue
                 print_info(f"准备恢复队列: 主队列={main_queue_was_running}, 内容队列={content_queue_was_running}")
                 if main_queue_was_running:
@@ -265,9 +303,8 @@ class Wx:
                     print_info("恢复内容任务队列...")
                     ContentTaskQueue.run_task_background()
                     print_success("内容任务队列已恢复")
-                # 注意：不再无条件清理资源，只在失败时清理（已在except块中处理）
             except Exception as e:
-                print_error(f"恢复队列失败: {e}") 
+                print_error(f"恢复队列失败: {e}")
     def GetCode(self,CallBack=None,Notice=None):
         self.Notice=Notice
         if  self.check_lock():
@@ -436,6 +473,38 @@ class Wx:
                 except Exception as e:
                     print(f"二维码图片获取失败: {str(e)}")
         return self.isLock
+    async def _wait_qrcode_ready(self, page, qr_tag, timeout=30):
+        """等待登录二维码图片加载完成（异步）
+
+        新版登录页可能默认展示"微信快捷登录"（open.weixin.qq.com iframe），
+        此时经典二维码处于隐藏状态且src为空，直接截图会得到空白图片或超时。
+        检测到该情况时点击"扫码登录"链接切换回二维码登录，
+        再等待二维码图片可见且真正加载完成。
+        """
+        import asyncio
+
+        deadline = time.time() + timeout
+        switch_clicked = False
+        while time.time() < deadline:
+            ready = await page.evaluate(
+                """(sel) => {
+                    const img = document.querySelector(sel);
+                    if (!img) return false;
+                    const style = window.getComputedStyle(img);
+                    if (style.display === 'none' || style.visibility === 'hidden') return false;
+                    return !!img.src && img.complete && img.naturalWidth > 50;
+                }""", qr_tag)
+            if ready:
+                return True
+            if not switch_clicked:
+                switch_link = page.locator("a.login__type__container__link_text", has_text="扫码登录")
+                if await switch_link.count() > 0 and await switch_link.first.is_visible():
+                    print_info("检测到快捷登录页面，切换到扫码登录...")
+                    await switch_link.first.click()
+                    switch_clicked = True
+            await asyncio.sleep(0.5)
+        return False
+
     async def wxLogin(self, CallBack=None, NeedExit=True):
         """
         微信公众平台登录流程（异步）：
@@ -474,11 +543,20 @@ class Wx:
             page = driver.page
 
             # 等待页面完全加载
+            # 新版登录页存在持续的轮询请求，networkidle可能永远不触发，
+            # 超时不视为错误，由后续二维码加载检测兜底
             print_info("正在加载登录页面...")
-            await page.wait_for_load_state("networkidle")
+            try:
+                await page.wait_for_load_state("networkidle", timeout=10000)
+            except Exception:
+                pass
 
             # 定位二维码区域
             qr_tag = ".login__type__container__scan__qrcode"
+            # 新版登录页可能默认展示"微信快捷登录"，二维码被隐藏或src为空，
+            # 需要先切换回扫码登录并等待二维码图片真正加载完成
+            if not await self._wait_qrcode_ready(page, qr_tag):
+                raise Exception("二维码加载超时，请重试")
             # 获取二维码图片URL
             qrcode = await page.query_selector(qr_tag)
             code_src = await qrcode.get_attribute("src")
@@ -503,7 +581,10 @@ class Wx:
                 if self.WX_HOME in current_url:
                     print(f"登录成功，正在获取cookie和token...")
             page.on('framenavigated', handle_frame_navigated)
-            await page.wait_for_event("framenavigated", timeout=5*60 * 1000)
+            # 只等待主页面跳转到公众平台首页，
+            # 不能用 wait_for_event("framenavigated")：页面内的快捷登录iframe
+            # 加载时也会触发该事件，导致未扫码就误判为登录成功
+            await page.wait_for_url(lambda url: "cgi-bin/home" in url, timeout=5*60 * 1000)
 
             from .success import setStatus
             with self._login_lock:

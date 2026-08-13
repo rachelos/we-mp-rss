@@ -196,7 +196,8 @@ def call_webhook(hook: MessageWebHook, is_test: bool = False) -> str:
             hook.task.web_hook_url,
             data=payload,
             headers=headers,
-            cookies=cookies
+            cookies=cookies,
+            timeout=30
         )
         response.raise_for_status()
         return "Webhook调用成功"

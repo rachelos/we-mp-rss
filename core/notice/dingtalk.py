@@ -27,7 +27,8 @@ def send_dingtalk_message(webhook_url, title, text, is_at_all=False, at_mobiles=
         response = requests.post(
             url=webhook_url,
             headers=headers,
-            data=json.dumps(data)
+            data=json.dumps(data),
+            timeout=30
         )
         print(response.text)
     except Exception as e:

@@ -26,8 +26,7 @@ class MpsAppMsg(WxGather):
     # 重写 get_Articles 方法
     def get_Articles(self, faker_id:str=None,Mps_id:str=None,Mps_title="",CallBack=None,start_page:int=0,MaxPage:int=1,interval=10,Gather_Content=False,Item_Over_CallBack=None,Over_CallBack=None):
         super().Start(mp_id=Mps_id)
-        if self.Gather_Content:
-            Gather_Content=True
+        Gather_Content = self.Gather_Content
         print(f"APP浏览器模式,是否采集[{Mps_title}]内容：{Gather_Content}\n")
         # 请求参数
         url = "https://mp.weixin.qq.com/cgi-bin/appmsgpublish"
