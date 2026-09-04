@@ -158,8 +158,8 @@ class MpsWereadMP(MpsWeread):
         return headers
 
     def _get_mp_articles_page(self, book_id: str, offset=0):
-        # 注意：/web/mp/articles 已被新版微信读书废弃（实测恒返回 -2041），
-        # 该方法仅保留供旧版兼容与测试使用；生产链路请用 _get_mp_cover。
+        # /web/mp/articles 曾在部分旧 Cookie 上返回 -2041，当时据此回退到 cover 方案；
+        # 实测该列表接口可用，是增量补抓的主路径。失败时由 get_Articles 回退 cover。
         try:
             response = requests.get(
                 f"{WEREAD_WEB_BASE}/web/mp/articles",
@@ -185,7 +185,7 @@ class MpsWereadMP(MpsWeread):
         return payload
 
     def _get_mp_cover(self, book_id: str) -> dict:
-        """获取公众号最新一篇文章（新版微信读书唯一可用入口）。
+        """获取公众号最新一篇文章（列表接口不可用时的兜底入口）。
 
         返回: {"name", "title", "pic", "reviewId", ...}；无文章或接口异常时抛错。
         """
@@ -263,6 +263,170 @@ class MpsWereadMP(MpsWeread):
             )
         return extract_mp_content(response.text)
 
+    def _collect_latest_via_cover(
+        self,
+        book_id: str,
+        Mps_id: str,
+        Mps_title: str,
+        gather_content: bool,
+        CallBack=None,
+        Item_Over_CallBack=None,
+    ) -> int:
+        """兜底方案：通过 /api/mp/cover 只采集最新一篇文章。"""
+        cover = self._get_mp_cover(book_id)
+        review_id = (cover.get("reviewId") or "").strip()
+        title = (cover.get("title") or "").strip()
+        self.response_valid = True
+
+        if not review_id:
+            raise WereadMPAPIError(
+                "empty_cover",
+                f"公众号「{Mps_title}」暂无文章",
+                retriable=False,
+            )
+
+        # 跨会话增量：最新文章已入库则无需重复采集
+        if self._is_article_gathered(Mps_id, review_id):
+            print_info(f"无新文章：最新《{title}》已在库中，跳过")
+            return self._get_feed_update_time(Mps_id)
+
+        print_info(f"发现新文章: {title}")
+        item = {
+            "aid": review_id,
+            "id": review_id,
+            "title": title,
+            "link": build_mp_link_from_review_id(review_id, book_id),
+            "cover": cover.get("pic") or "",
+            "digest": cover.get("digest") or "",
+            "content": "",
+            "create_time": int(time.time()),
+            "update_time": int(time.time()),
+            "read_num": 0,
+            "like_num": 0,
+            "item_show_type": 0,
+            "copyright_stat": 1,
+            "mp_id": Mps_id,
+        }
+        if gather_content:
+            content_interval = self._get_content_interval()
+            if content_interval:
+                time.sleep(content_interval)
+            try:
+                item["content"] = self._get_mp_content(review_id)
+            except WereadMPAPIError as exc:
+                logger.warning(f"微信读书正文获取失败 [{review_id}]: {exc}")
+        if CallBack is not None:
+            super().FillBack(
+                CallBack=CallBack,
+                data=item,
+                Ext_Data={"mp_title": Mps_title, "mp_id": Mps_id},
+            )
+        if Item_Over_CallBack is not None:
+            Item_Over_CallBack(item)
+        return int(item["update_time"])
+
+    def _collect_via_article_list(
+        self,
+        book_id: str,
+        Mps_id: str,
+        Mps_title: str,
+        gather_content: bool,
+        start_page: int,
+        MaxPage: int,
+        CallBack=None,
+        Item_Over_CallBack=None,
+    ) -> int:
+        """增量补抓：翻页扫描文章列表，采集所有尚未入库的文章。
+
+        停止条件（满足其一即停止翻页）：
+        - 遇到已入库的文章（``_is_article_gathered``，以 articles 表为已采记录的唯一权威）
+        - 列表翻完（空页）或达到 ``weread.mp_max_pages`` 页数上限
+
+        注意：不以 ``Feed.update_time`` 作为停止边界。cover 兜底模式会把
+        **抓取时间**（而非文章发布时间）写入 update_time，若按时间停止，
+        cover 时代漏采的文章（发布早于上次抓取、但不是当时最新一篇）将被永久
+        跳过。以入库记录为边界可以在 cover → 列表切换后一次性补齐这些漏采文章，
+        稳态下第一页就会命中已入库文章，效率不受影响。
+
+        翻页间隔 ``weread.page_interval``、正文请求间隔 ``weread.content_interval``
+        用于控制请求频率，避免触发微信读书流控。
+        """
+        start_page = max(int(start_page or 0), 0)
+        end_page = max(int(MaxPage or 1), start_page + 1)
+        offset = start_page
+        latest_publish_time = 0
+        content_failures = []
+        previous_update_time = self._get_feed_update_time(Mps_id)
+        requested_pages = end_page - start_page
+        page_limit = (
+            self._get_catchup_page_limit(requested_pages)
+            if previous_update_time
+            else requested_pages
+        )
+        reached_gathered = not previous_update_time
+        content_request_count = 0
+        content_interval = self._get_content_interval()
+        page_interval = self._get_page_interval()
+        new_count = 0
+
+        for page in range(start_page, start_page + page_limit):
+            if page > start_page and page_interval:
+                time.sleep(page_interval)
+            payload = self._get_mp_articles_page(book_id, offset=offset)
+            articles, group_count = parse_mp_articles(payload)
+            self.response_valid = True
+
+            for item in articles:
+                if super().HasGathered(item["aid"]):
+                    continue
+                publish_time = int(item.get("update_time") or item.get("create_time") or 0)
+                if self._is_article_gathered(Mps_id, item["aid"]):
+                    reached_gathered = True
+                    continue
+                item["mp_id"] = Mps_id
+                latest_publish_time = max(latest_publish_time, publish_time)
+                if gather_content:
+                    if content_request_count and content_interval:
+                        time.sleep(content_interval)
+                    content_request_count += 1
+                    try:
+                        item["content"] = self._get_mp_content(item["aid"])
+                    except WereadMPAPIError as exc:
+                        logger.warning(f"微信读书正文获取失败 [{item['aid']}]: {exc}")
+                        content_failures.append(item["aid"])
+                        continue
+                if CallBack is not None:
+                    super().FillBack(
+                        CallBack=CallBack,
+                        data=item,
+                        Ext_Data={"mp_title": Mps_title, "mp_id": Mps_id},
+                    )
+                if Item_Over_CallBack is not None:
+                    Item_Over_CallBack(item)
+                new_count += 1
+
+            if group_count == 0:
+                reached_gathered = True
+                break
+            # WeRead defines offset in top-level review groups, not subReviews.
+            offset += group_count
+            if previous_update_time and reached_gathered:
+                break
+
+        if content_failures:
+            raise WereadMPAPIError(
+                "content_incomplete",
+                f"{len(content_failures)} article bodies could not be fetched",
+            )
+        if not reached_gathered:
+            raise WereadMPAPIError(
+                "backlog_incomplete",
+                f"catch-up did not reach any gathered article after {page_limit} pages",
+            )
+
+        print_info(f"[{Mps_title}] 增量补抓完成: 新增 {new_count} 篇")
+        return latest_publish_time or previous_update_time
+
     def get_Articles(
         self,
         faker_id: str = None,
@@ -278,10 +442,10 @@ class MpsWereadMP(MpsWeread):
     ):
         """Collect one existing WeChat feed without changing its RSS identity.
 
-        新版微信读书网页版已废弃 ``/web/mp/articles`` 列表接口（恒返回 -2041），
-        前端仅保留 ``/api/mp/cover``（最新一篇）+ ``/web/mp/content``（正文）。
-        因此采用「cover 增量」方案：每次只取最新一篇文章，已入库则跳过，
-        无法回补历史文章列表（旧版接口才支持）。
+        主路径走 ``/web/mp/articles`` 列表接口做增量补抓：从最新一页开始翻页，
+        采集所有尚未入库的文章，遇到已入库文章即停止（上一轮到这一轮之间漏采的
+        文章会一并补齐）。列表接口不可用（如 -2012 登录超时 / -2041 等）时回退到
+        ``/api/mp/cover`` 只取最新一篇的兜底逻辑，保证采集不中断。
         """
         self.articles = []
         self.aids = []
@@ -318,61 +482,36 @@ class MpsWereadMP(MpsWeread):
             print_warning(f"[{Mps_title}] 书架检查异常: {exc}")
 
         gather_content = bool(Gather_Content or self.Gather_Content)
-        content_interval = self._get_content_interval()
-        latest_publish_time = 0
 
         print_info(f"微信读书公众号采集模式: {Mps_title} ({book_id})")
         try:
-            cover = self._get_mp_cover(book_id)
-            review_id = (cover.get("reviewId") or "").strip()
-            title = (cover.get("title") or "").strip()
-            self.response_valid = True
-
-            if not review_id:
-                raise WereadMPAPIError(
-                    "empty_cover",
-                    f"公众号「{Mps_title}」暂无文章",
-                    retriable=False,
+            try:
+                latest_publish_time = self._collect_via_article_list(
+                    book_id,
+                    Mps_id,
+                    Mps_title,
+                    gather_content,
+                    start_page,
+                    MaxPage,
+                    CallBack=CallBack,
+                    Item_Over_CallBack=Item_Over_CallBack,
                 )
-
-            # 跨会话增量：最新文章已入库则无需重复采集
-            if self._is_article_gathered(Mps_id, review_id):
-                print_info(f"无新文章：最新《{title}》已在库中，跳过")
-                latest_publish_time = self._get_feed_update_time(Mps_id)
-            else:
-                print_info(f"发现新文章: {title}")
-                item = {
-                    "aid": review_id,
-                    "id": review_id,
-                    "title": title,
-                    "link": build_mp_link_from_review_id(review_id, book_id),
-                    "cover": cover.get("pic") or "",
-                    "digest": cover.get("digest") or "",
-                    "content": "",
-                    "create_time": int(time.time()),
-                    "update_time": int(time.time()),
-                    "read_num": 0,
-                    "like_num": 0,
-                    "item_show_type": 0,
-                    "copyright_stat": 1,
-                    "mp_id": Mps_id,
-                }
-                if gather_content:
-                    if content_interval:
-                        time.sleep(content_interval)
-                    try:
-                        item["content"] = self._get_mp_content(review_id)
-                    except WereadMPAPIError as exc:
-                        logger.warning(f"微信读书正文获取失败 [{review_id}]: {exc}")
-                if CallBack is not None:
-                    super().FillBack(
-                        CallBack=CallBack,
-                        data=item,
-                        Ext_Data={"mp_title": Mps_title, "mp_id": Mps_id},
-                    )
-                if Item_Over_CallBack is not None:
-                    Item_Over_CallBack(item)
-                latest_publish_time = int(item["update_time"])
+            except WereadMPAPIError as exc:
+                if self.response_valid:
+                    # 列表接口本身可用（已成功翻页），属于正文缺失或补抓不完整
+                    # 等真实错误，直接上抛，下次任务重试。
+                    raise
+                print_warning(
+                    f"[{Mps_title}] 文章列表接口不可用({exc})，回退到仅取最新一篇"
+                )
+                latest_publish_time = self._collect_latest_via_cover(
+                    book_id,
+                    Mps_id,
+                    Mps_title,
+                    gather_content,
+                    CallBack=CallBack,
+                    Item_Over_CallBack=Item_Over_CallBack,
+                )
 
             self.update_mps(
                 Mps_id,
