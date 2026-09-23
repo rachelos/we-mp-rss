@@ -4,6 +4,7 @@ from unittest.mock import Mock, patch
 from core.wx.model.weread_mp import (
     MpsWereadMP,
     WereadMPAPIError,
+    build_mp_link_from_review_id,
     build_mp_url,
     extract_mp_content,
     parse_mp_articles,
@@ -49,7 +50,7 @@ class WereadMpParsingTest(unittest.TestCase):
                 "aid": "MP_WXS_1_review-1",
                 "id": "MP_WXS_1_review-1",
                 "title": "Article title",
-                "link": "https://mp.weixin.qq.com/s/abc~def",
+                "link": "https://mp.weixin.qq.com/s/abc_def",
                 "cover": "https://example.test/cover.jpg",
                 "digest": "Article summary",
                 "content": "",
@@ -79,6 +80,25 @@ class WereadMpParsingTest(unittest.TestCase):
 
     def test_build_mp_url_rejects_missing_original_id(self):
         self.assertEqual(build_mp_url(""), "")
+
+    def test_build_mp_url_converts_weread_tilde_to_underscore(self):
+        # 实例：阿信漫谈《再谈定投金额》，微信读书 ID 里 '~' 应为 '_'，
+        # 原样保留会导致微信返回"参数错误"
+        self.assertEqual(
+            build_mp_url("ySsAk3lUFT0Wh~9IZCtr-g"),
+            "https://mp.weixin.qq.com/s/ySsAk3lUFT0Wh_9IZCtr-g",
+        )
+
+    def test_build_mp_link_from_review_id_converts_tilde_and_strips_prefix(self):
+        review_id = "MP_WXS_3990360005_ySsAk3lUFT0Wh~9IZCtr-g"
+        self.assertEqual(
+            build_mp_link_from_review_id(review_id, "MP_WXS_3990360005"),
+            "https://mp.weixin.qq.com/s/ySsAk3lUFT0Wh_9IZCtr-g",
+        )
+        self.assertEqual(
+            build_mp_link_from_review_id(review_id),
+            "https://mp.weixin.qq.com/s/ySsAk3lUFT0Wh_9IZCtr-g",
+        )
 
 
 class WereadMpRequestTest(unittest.TestCase):
@@ -252,7 +272,7 @@ class WereadMpCollectorTest(unittest.TestCase):
         )
 
         collector._get_mp_articles_page.assert_called_once_with("MP_WXS_1", offset=0)
-        self.assertEqual(saved[0]["url"], "https://mp.weixin.qq.com/s/abc~def")
+        self.assertEqual(saved[0]["url"], "https://mp.weixin.qq.com/s/abc_def")
         self.assertEqual(saved[0]["content"], "<p>Full text</p>")
         self.assertEqual(saved[0]["publish_time"], 1778580002)
         self.assertEqual(collector.all_count(), 1)
