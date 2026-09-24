@@ -27,9 +27,11 @@ def build_mp_url(original_id: str) -> str:
     original_id = str(original_id or "").strip()
     if not original_id:
         return ""
-    # 注意：微信文章短链 token 中可能含 '~'（如 4OcS7~rrtk2Lwe4P0YPiGg），
-    # 这是合法字符，必须原样保留。若替换为 '_'，微信会 302 跳转、部分阅读器无法打开。
-    article_token = quote(original_id, safe="~")
+    # 微信文章短链 token 的字符集是 URL-safe 的（A-Za-z0-9_-），
+    # 微信读书返回的 ID 里把 '_' 写成了 '~'，必须换回来，否则微信返回"参数错误"。（如 ySsAk3lUFT0Wh~9IZCtr-g）
+    # （实测 2026-09-23：149 篇含 '~' 的链接全部参数错误，替换后 100% 可打开。）
+    original_id = original_id.replace("~", "_")
+    article_token = quote(original_id, safe="")
     return f"https://mp.weixin.qq.com/s/{article_token}"
 
 
@@ -37,8 +39,8 @@ def build_mp_link_from_review_id(review_id: str, book_id: str = "") -> str:
     """从 WeRead 的 reviewId 推导公众号原文链接。
 
     reviewId 形如 ``MP_WXS_<bookId>_<articleToken>``，末尾段即为
-    mp.weixin.qq.com 原文短链的 token。token 中可能含 ``~``（如
-    ``4OcS7~rrtk2Lwe4P0YPiGg``），须原样保留。新版接口 ``/api/mp/cover``
+    mp.weixin.qq.com 原文短链的 token。微信读书把 token 里的 ``_`` 写成了
+    ``~``，须还原为 ``_``，否则微信返回"参数错误"。新版接口 ``/api/mp/cover``
     不返回 originalId，只能由此推导。
     """
     review_id = str(review_id or "").strip()
@@ -50,7 +52,9 @@ def build_mp_link_from_review_id(review_id: str, book_id: str = "") -> str:
         token = review_id[len(prefix):]
     elif "_" in token:
         token = token.split("_")[-1]
-    return f"https://mp.weixin.qq.com/s/{quote(token, safe='~')}"
+    # 前缀拆分依赖原始的 '_'，'~' → '_' 的还原必须放在拆分之后
+    token = token.replace("~", "_")
+    return f"https://mp.weixin.qq.com/s/{quote(token, safe='')}"
 
 
 def _raise_response_error(payload: dict):
