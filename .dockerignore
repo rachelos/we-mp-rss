@@ -15,4 +15,10 @@ build
 ref
 web_ui/node_modules
 qtserver/node_modules
-
+# Exclude standalone test/debug scripts from production Docker image
+atack.py
+dns.py
+scripts/probe_*.py
+scripts/test_*.py
+*.lic
+*.db
