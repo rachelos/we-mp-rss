@@ -53,6 +53,7 @@ class MpsAppMsg(WxGather):
                 break
             begin = i * count
             params["begin"] = str(begin)
+            _skip_item_over = False
             print(f"第{i+1}页开始爬取\n")
             # 随机暂停几秒，避免过快的请求导致过快的被查到
             time.sleep(random.randint(0,interval))
@@ -67,10 +68,15 @@ class MpsAppMsg(WxGather):
                     retry_count += 1
                     if retry_count < max_retries:
                         print_warning(f"频率限制, 第{retry_count}次重试...")
-                        time.sleep(60 * retry_count)  # 递增等待
+                        time.sleep(60 * retry_count)
+                        _skip_item_over = True
                         continue
-                    super().Error("frequencey control, stop at {}".format(str(begin)))
-                    break
+                    print_warning("触发频率限制(ret=200013)，自动降级到 free_publish / weread_mp 模式...")
+                    _skip_item_over = True
+                    self._fallback_to_free_publish(faker_id, Mps_id, Mps_title, CallBack,
+                                                    start_page, MaxPage, interval,
+                                                    Gather_Content, Item_Over_CallBack, Over_CallBack)
+                    return
                 
                 if msg['base_resp']['ret'] == 200003:
                     super().Error("Invalid Session, stop at {}".format(str(begin)),code="Invalid Session")
@@ -80,6 +86,7 @@ class MpsAppMsg(WxGather):
                     err_msg = msg['base_resp'].get('err_msg','')
                     print_warning(f"appmsgpublish 返回错误(ret={msg['base_resp']['ret']}): {err_msg}")
                     print_info("检测到 appmsgpublish 接口不可用，自动降级到 free_publish 模式...")
+                    _skip_item_over = True
                     self._fallback_to_free_publish(faker_id, Mps_id, Mps_title, CallBack,
                                                     start_page, MaxPage, interval,
                                                     Gather_Content, Item_Over_CallBack, Over_CallBack)
@@ -120,7 +127,8 @@ class MpsAppMsg(WxGather):
                 print(f"Request error: {e}")
                 break
             finally:
-                super().Item_Over(item={"mps_id":Mps_id,"mps_title":Mps_title},CallBack=Item_Over_CallBack)
+                if not _skip_item_over:
+                    super().Item_Over(item={"mps_id":Mps_id,"mps_title":Mps_title},CallBack=Item_Over_CallBack)
         super().Over(CallBack=Over_CallBack)
         pass
 
