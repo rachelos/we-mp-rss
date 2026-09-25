@@ -186,7 +186,53 @@ class MpsFreePublish(WxGather):
                 continue
 
         if effective_endpoint is None:
-            super().Error("所有端点均不可用，请检查登录状态或尝试 Playwright 模式")
+            try:
+                from core.wx.model.weread_mp import MpsWereadMP
+                wmp = MpsWereadMP()
+                wmp._load_weread_auth()
+                if wmp._weread_cookies:
+                    print_info("所有 MP 后台端点均受限，检测到已配置微信读书 Cookie，自动切换至 weread_mp 通道...")
+                    wmp.get_Articles(
+                        faker_id=faker_id,
+                        Mps_id=Mps_id,
+                        Mps_title=Mps_title,
+                        CallBack=CallBack,
+                        start_page=start_page,
+                        MaxPage=MaxPage,
+                        interval=interval,
+                        Gather_Content=Gather_Content,
+                        Item_Over_CallBack=Item_Over_CallBack,
+                        Over_CallBack=Over_CallBack,
+                    )
+                    return
+            except Exception as e:
+                print_warning(f"降级到 weread_mp 失败: {e}")
+
+            if getattr(self, "_auto_fallback", False):
+                try:
+                    print_info("自动降级到 Playwright 浏览器模式...")
+                    from core.wx.model.playwright_mp import MpsPlaywright
+                    pw = MpsPlaywright()
+                    pw.token = self.token
+                    pw.cookies = self.cookies
+                    pw.get_Articles(
+                        faker_id=faker_id,
+                        Mps_id=Mps_id,
+                        Mps_title=Mps_title,
+                        CallBack=CallBack,
+                        start_page=start_page,
+                        MaxPage=MaxPage,
+                        interval=interval,
+                        Gather_Content=Gather_Content,
+                        Item_Over_CallBack=Item_Over_CallBack,
+                        Over_CallBack=Over_CallBack,
+                    )
+                    return
+                except Exception as e:
+                    print_warning(f"降级到 Playwright 失败: {e}")
+
+            super().Error("所有端点均不可用，请检查登录状态或配置微信读书(weread_mp)/Playwright模式")
+            super().Over(CallBack=Over_CallBack)
             return
 
         # 使用有效端点开始采集
