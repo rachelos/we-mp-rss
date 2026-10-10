@@ -22,8 +22,55 @@
         部分凭据由 config.yaml 或环境变量管理，页面不会覆盖这些值。
       </a-alert>
 
+      <!-- 多账号列表 -->
+      <a-divider orientation="left">微信账号（{{ accountCount }} 个）</a-divider>
+      <a-alert type="info" style="margin-bottom: 12px">
+        配额按微信账号独立计算。账号 A 的配额用尽时会自动切到账号 B 继续采集，
+        所以多绑几个微信号可显著提升采集成功率。点击「扫码授权」可继续添加，
+        同一个微信号重复扫码只会更新它的 Cookie，不会重复添加。
+      </a-alert>
+      <a-spin :loading="loadingAccounts">
+        <a-empty
+          v-if="!loadingAccounts && accounts.length === 0"
+          description="尚未绑定微信账号，点击下方「扫码授权」添加第一个"
+        />
+        <a-list v-else :data="accounts" :bordered="false" style="margin-bottom: 12px">
+          <a-list-item v-for="acc in accounts" :key="acc.vid || acc.index">
+            <a-list-item-meta>
+              <template #title>
+                <a-space>
+                  <a-tag :color="acc.is_primary ? 'arcoblue' : 'gray'">
+                    第 {{ acc.index }} 个微信
+                  </a-tag>
+                  <span>{{ acc.name }}</span>
+                  <a-tag v-if="acc.is_primary" color="green" size="small">主账号</a-tag>
+                  <a-tooltip v-if="acc.is_primary" content="主账号用于连接测试与状态显示；配额耗尽时会自动切到其他账号">
+                    <icon-question-circle />
+                  </a-tooltip>
+                </a-space>
+              </template>
+              <template #description>
+                VID: {{ acc.vid || '未知' }} · Cookie {{ acc.cookie_masked || '—' }}
+                <template v-if="acc.has_ticket"> · 有 ticket</template>
+              </template>
+            </a-list-item-meta>
+            <template #extra>
+              <a-button
+                size="mini"
+                status="danger"
+                :loading="removingVid === acc.vid"
+                :disabled="managedByConfig || (accountCount <= 1 && acc.is_primary)"
+                @click="removeAccount(acc)"
+              >
+                移除
+              </a-button>
+            </template>
+          </a-list-item>
+        </a-list>
+      </a-spin>
+
       <a-form :model="cookieForm" layout="vertical" style="margin-top: 16px">
-        <a-form-item label="微信读书 Cookie" field="cookie" extra="从浏览器 weread.qq.com 页面按 F12 → Network 标签 → 任意请求 → Request Headers 中复制完整 Cookie 值">
+        <a-form-item label="微信读书 Cookie" field="cookie" :extra="accountCount > 1 ? `当前编辑主账号（第 1 个微信）。粘贴另一个微信号的 Cookie 可新增账号；同一 VID 会覆盖更新。也可直接用「扫码授权」。` : '从浏览器 weread.qq.com 页面按 F12 → Network 标签 → 任意请求 → Request Headers 中复制完整 Cookie 值'">
           <a-textarea
             v-model="cookieForm.cookie"
             placeholder="粘贴完整的 Cookie 字符串，需包含 wr_vid、wr_skey 等关键字段"
@@ -57,7 +104,7 @@
           </a-button>
           <a-button type="outline" status="success" @click="showQrAuth">
             <template #icon><icon-scan /></template>
-            扫码授权
+            {{ accountCount > 0 ? '扫码授权（添加账号）' : '扫码授权' }}
           </a-button>
           <a-button @click="testConnection" :loading="testing">
             <template #icon><icon-check-circle /></template>
@@ -141,6 +188,7 @@
     <!-- 扫码授权弹窗 -->
     <WereadAuthQrcode
       ref="wereadQrRef"
+      :account-count="accountCount"
       @success="handleWereadQrSuccess"
       @cancel="handleWereadQrCancel"
     />
@@ -172,6 +220,20 @@ const saving = ref(false)
 const savingConfig = ref(false)
 const testing = ref(false)
 const hasConfig = ref(false)
+
+// 多账号（配额按微信账号独立计算，耗尽时自动切换）
+interface WereadAccount {
+  index: number
+  vid: string
+  name: string
+  cookie_masked: string
+  has_ticket: boolean
+  is_primary: boolean
+}
+const accounts = ref<WereadAccount[]>([])
+const accountCount = ref(0)
+const loadingAccounts = ref(false)
+const removingVid = ref('')
 const isWereadMp = ref(false)
 const managedByConfig = ref(false)
 const cookieManagedByConfig = ref(false)
@@ -214,14 +276,20 @@ function showQrAuth() {
 }
 
 async function handleWereadQrSuccess(result: any) {
-  // 扫码成功后刷新状态
+  const prevCount = accountCount.value
+  // 扫码成功后刷新状态（后端会返回完整账号列表）
   await loadStatus()
   await testConnection()
   // 同步顶栏图标状态，避免 header 仍显示"未授权"
   if (refreshWereadStatus) {
     await refreshWereadStatus()
   }
-  Message.success(`微信读书授权成功，用户 VID: ${result?.vid || ''}`)
+  const vid = result?.vid || ''
+  if (accountCount.value > prevCount) {
+    Message.success(`已添加第 ${accountCount.value} 个微信账号（VID: ${vid}），配额耗尽时将自动切换`)
+  } else {
+    Message.success(`微信读书授权成功，用户 VID: ${vid}`)
+  }
 }
 
 function handleWereadQrCancel() {
@@ -241,9 +309,15 @@ onMounted(async () => {
 })
 
 async function loadStatus() {
+  loadingAccounts.value = true
   try {
     const data = await getWereadStatus() as any
     hasConfig.value = data.configured
+    // 多账号列表（后端对旧格式做了归一化，前端无需区分是否已迁移）
+    accounts.value = Array.isArray(data.accounts) ? data.accounts : []
+    accountCount.value = typeof data.account_count === 'number'
+      ? data.account_count
+      : accounts.value.length
     isWereadMp.value = data.gather_model === 'weread_mp'
     managedByConfig.value = data.managed_by_config
     cookieManagedByConfig.value = data.cookie_managed_by_config
@@ -265,6 +339,8 @@ async function loadStatus() {
     cookieForm.browser_type = data.browser_type || 'chrome'
   } catch (e) {
     // 忽略
+  } finally {
+    loadingAccounts.value = false
   }
 }
 
@@ -275,14 +351,24 @@ async function saveCookie() {
   }
   saving.value = true
   try {
-    await saveWereadCookie(
+    const res = await saveWereadCookie(
       cookieForm.cookie || undefined,
       '',
       cookieForm.name,
       cookieForm.ticket || undefined,
-    )
-    Message.success('微信读书凭据保存成功')
+    ) as any
     hasConfig.value = true
+    // 后端返回最新账号列表：新增账号时明确告知是「第 N 个微信」
+    if (Array.isArray(res?.accounts)) {
+      accounts.value = res.accounts
+      accountCount.value = res.account_count ?? res.accounts.length
+    }
+    if (res?.action === 'added') {
+      Message.success(`已添加第 ${res.account_count} 个微信账号，配额耗尽时将自动切换`)
+    } else {
+      Message.success(`凭据已保存，当前共 ${accountCount.value} 个微信账号`)
+    }
+    await loadStatus()
     await testConnection()
   } catch (e: any) {
     Message.error(e?.message || '保存失败')
@@ -342,15 +428,48 @@ async function loadBookshelf() {
 }
 
 async function clearCookie() {
+  // 有多个账号时明确区分：移除单个 vs 清空全部
+  const isMulti = accountCount.value > 1
+  const tip = isMulti
+    ? `确定要清除全部 ${accountCount.value} 个微信账号吗？此操作不可恢复。建议改为逐个「移除」。`
+    : '确定要清除该微信账号的 Cookie 吗？'
+  if (!window.confirm(tip)) return
   try {
-    await clearWereadCookie()
-    Message.success('Cookie 已清除')
+    const res = await clearWereadCookie() as any
+    Message.success(isMulti ? '全部账号已清除' : 'Cookie 已清除')
+    accounts.value = []
+    accountCount.value = 0
     hasConfig.value = false
     connectionStatus.value = 'idle'
     bookshelf.value = []
     bookCount.value = 0
+    if (res?.accounts) {
+      accounts.value = res.accounts
+      accountCount.value = res.account_count ?? res.accounts.length
+    }
   } catch (e: any) {
     Message.error(e?.message || '清除失败')
+  }
+}
+
+// 移除单个账号（保留其它账号，便于下线某个微信号）
+async function removeAccount(acc: WereadAccount) {
+  if (!window.confirm(`确定移除「${acc.name}」（VID ${acc.vid}）吗？`)) return
+  removingVid.value = acc.vid
+  try {
+    const res = await clearWereadCookie(acc.vid) as any
+    accounts.value = res?.accounts || []
+    accountCount.value = res?.account_count ?? accounts.value.length
+    hasConfig.value = accountCount.value > 0
+    Message.success(res?.message || `已移除，剩余 ${accountCount.value} 个账号`)
+    if (accountCount.value > 0) {
+      // 主账号可能已变（移除的是第一项），重新拉一次状态回显
+      await loadStatus()
+    }
+  } catch (e: any) {
+    Message.error(e?.message || '移除失败')
+  } finally {
+    removingVid.value = ''
   }
 }
 

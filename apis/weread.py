@@ -74,6 +74,53 @@ def _save_weread_data(data: dict):
     cfg.reload()
 
 
+def _normalize_accounts(data: dict) -> list:
+    """把 weread_data 归一化成 accounts 数组（兼容旧的单账号 cookie 字段）。
+
+    旧版只存 ``weread_data.cookie`` 单个账号；多账号版本存
+    ``weread_data.accounts`` 数组。两者可共存，返回的列表始终是
+    ``[{cookie, vid, ticket, name}, ...]``。
+    """
+    accounts = data.get("accounts")
+    if isinstance(accounts, list) and accounts:
+        return accounts
+    # 旧格式迁移：单个 cookie 包成 1 元素数组
+    legacy = []
+    if data.get("cookie"):
+        legacy.append({
+            "cookie": data.get("cookie", ""),
+            "vid": data.get("vid", ""),
+            "ticket": data.get("ticket", ""),
+            "name": data.get("name", ""),
+        })
+    return legacy
+
+
+def _mask(secret: str, keep: int = 6) -> str:
+    """凭据脱敏：只保留开头若干字符，用于在页面展示账号列表"""
+    secret = secret or ""
+    if len(secret) <= keep:
+        return "***" if secret else ""
+    return f"{secret[:keep]}***{secret[-4:]}"
+
+
+def _account_views(data: dict) -> list:
+    """构造给前端展示的账号列表（不含完整 Cookie）"""
+    views = []
+    for idx, acc in enumerate(_normalize_accounts(data), start=1):
+        vid = str(acc.get("vid", "") or "")
+        views.append({
+            "index": idx,
+            "vid": vid,
+            "name": acc.get("name", "") or f"账号{idx}",
+            "cookie_masked": _mask(acc.get("cookie", "")),
+            "has_ticket": bool(acc.get("ticket", "")),
+            # 主账号（数组第一项）等价于旧版的「当前账号」
+            "is_primary": idx == 1,
+        })
+    return views
+
+
 @router.get("", summary="获取微信读书配置状态")
 async def get_weread_status(current_user=Depends(get_current_user_or_ak)):
     """获取当前微信读书 Cookie 的配置状态"""
@@ -81,10 +128,13 @@ async def get_weread_status(current_user=Depends(get_current_user_or_ak)):
     config_cookie = app_cfg.get("weread.cookie", "")
     config_ticket = app_cfg.get("weread.ticket", "")
     config_vid = app_cfg.get("weread.vid", "")
-    cookie = config_cookie or data.get("cookie", "")
-    ticket = config_ticket or data.get("ticket", "")
-    vid = config_vid or data.get("vid", "")
-    name = data.get("name", "")
+    accounts = _normalize_accounts(data)
+    # 主账号（第一项）作为兼容字段回显；未迁移的旧格式由 _normalize_accounts 包装
+    primary = accounts[0] if accounts else {}
+    cookie = config_cookie or primary.get("cookie", "") or data.get("cookie", "")
+    ticket = config_ticket or primary.get("ticket", "") or data.get("ticket", "")
+    vid = config_vid or primary.get("vid", "") or data.get("vid", "")
+    name = primary.get("name", "") or data.get("name", "")
     gather_model = app_cfg.get("gather.model", "web") or "web"
 
     # 判断是否已配置
@@ -92,6 +142,9 @@ async def get_weread_status(current_user=Depends(get_current_user_or_ak)):
 
     return success_response({
         "configured": has_cookie,
+        # 多账号：账号数量 + 脱敏列表（前端据此渲染「第N个微信」）
+        "account_count": len(accounts),
+        "accounts": _account_views(data),
         "cookie_masked": cookie[:20] + "..." if cookie else "",
         "ticket_masked": ticket[:12] + "..." if ticket else "",
         "cookie": cookie,          # 完整 Cookie（供管理页回显，自托管单用户场景）
@@ -130,7 +183,10 @@ async def save_weread_cookie(
     if config_ticket and req.ticket is not None:
         return error_response(409, "x-wr-ticket 由 config.yaml 或环境变量管理，不能在页面覆盖")
 
-    cookie_str = config_cookie or (req.cookie.strip() if req.cookie else data.get("cookie", ""))
+    accounts = _normalize_accounts(data)
+    # 未传 cookie 时沿用主账号（保持旧行为：只改 ticket/name 不动 cookie）
+    fallback_cookie = accounts[0].get("cookie", "") if accounts else data.get("cookie", "")
+    cookie_str = config_cookie or (req.cookie.strip() if req.cookie else fallback_cookie)
     if not cookie_str:
         return error_response(400, "Cookie 不能为空")
 
@@ -146,20 +202,60 @@ async def save_weread_cookie(
     if not vid:
         return error_response(400, "Cookie 中未找到 wr_vid，请检查 Cookie 格式")
 
-    if not config_cookie:
-        data["cookie"] = cookie_str
-    if req.ticket is not None:
-        data["ticket"] = req.ticket.strip()
-    if not app_cfg.get("weread.vid", ""):
-        data["vid"] = vid
-    data["name"] = (req.name or "").strip() or data.get("name", "")
+    ticket_str = req.ticket.strip() if req.ticket is not None else None
+    name_str = (req.name or "").strip()
 
+    if config_cookie:
+        # 凭据由 config.yaml/环境变量托管：不在 wx.lic 里建账号，只记 ticket/name
+        if ticket_str is not None:
+            data["ticket"] = ticket_str
+        if name_str:
+            data["name"] = name_str
+        _save_weread_data(data)
+        return success_response({
+            "vid": vid,
+            "name": data.get("name", ""),
+            "account_count": len(accounts),
+        }, "Cookie 保存成功（凭据由部署配置托管）")
+
+    # 写入 accounts 数组：同 vid 视为该账号刷新 Cookie，否则追加为新账号。
+    # 与 driver/weread_qr.py 的 _save_cookies_to_lic 保持同一套去重口径。
+    new_entry = {
+        "cookie": cookie_str,
+        "vid": vid,
+        "ticket": ticket_str if ticket_str is not None else "",
+        "name": name_str,
+    }
+    matched = None
+    for acc in accounts:
+        if str(acc.get("vid", "")) == vid:
+            matched = acc
+            break
+    if matched is not None:
+        # 保留用户改过的 name（未显式填写时不清空）
+        new_entry["name"] = name_str or matched.get("name", "")
+        if ticket_str is None:
+            new_entry["ticket"] = matched.get("ticket", "")
+        accs = accounts
+        accs[accs.index(matched)] = new_entry
+        action = "updated"
+    else:
+        accs = accounts + [new_entry]
+        action = "added"
+
+    data["accounts"] = accs
+    # 旧格式字段清空，避免两处各存一份 cookie 后互相覆盖
+    for key in ("cookie", "vid", "name", "ticket"):
+        data.pop(key, None)
     _save_weread_data(data)
 
     return success_response({
         "vid": vid,
-        "name": data.get("name", ""),
-    }, "Cookie 保存成功")
+        "name": new_entry["name"],
+        "action": action,
+        "account_count": len(accs),
+        "accounts": _account_views(data),
+    }, f"Cookie 保存成功，当前共 {len(accs)} 个微信账号")
 
 
 @router.post("/config", summary="保存微信读书 Cookie 自动刷新配置")
@@ -405,18 +501,46 @@ async def collect_weread_notes(
 
 
 @router.delete("/cookie", summary="清除微信读书 Cookie")
-async def clear_weread_cookie(current_user=Depends(get_current_user_or_ak)):
-    """清除已保存的微信读书 Cookie"""
+async def clear_weread_cookie(
+    vid: str = "",
+    current_user=Depends(get_current_user_or_ak),
+):
+    """清除已保存的微信读书 Cookie
+
+    - 带 ``vid``：只清除该账号（保留其它账号，可用于下线某个微信号）
+    - 不带 ``vid``：清除全部账号（保持旧版行为）
+    """
     if any(app_cfg.get(key, "") for key in ("weread.cookie", "weread.ticket", "weread.vid")):
         return error_response(409, "凭据由 config.yaml 或环境变量管理，请在部署配置中清除")
+
     data = _load_weread_data()
+    accounts = _normalize_accounts(data)
+
+    if vid:
+        accounts = [a for a in accounts if str(a.get("vid", "")) != vid]
+        data["accounts"] = accounts
+        for key in ("cookie", "vid", "name", "ticket"):
+            data.pop(key, None)
+        _save_weread_data(data)
+        return success_response(
+            {
+                "account_count": len(accounts),
+                "accounts": _account_views(data),
+            },
+            f"账号 {vid} 已清除，剩余 {len(accounts)} 个",
+        )
+
+    data["accounts"] = []
     data["cookie"] = ""
     data["ticket"] = ""
     data["vid"] = ""
     # 保留 name
     _save_weread_data(data)
 
-    return success_response(message="Cookie 已清除")
+    return success_response(
+        {"account_count": 0, "accounts": []},
+        "全部微信账号的 Cookie 已清除",
+    )
 
 
 # ---- 微信读书扫码授权 API ----

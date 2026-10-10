@@ -849,16 +849,45 @@ class WereadQRLogin:
                 except Exception:
                     weread_data = {}
 
-            weread_data["cookie"] = cookie_str
-            weread_data["vid"] = str(vid)
-            # 保留原有 name（如果有的话）
-            if "name" not in weread_data:
-                weread_data["name"] = ""
+            # 多账号：迁移旧格式到 accounts 数组，新账号追加到数组末尾
+            accounts = weread_data.get("accounts", None)
+            if not isinstance(accounts, list):
+                # 旧格式迁移：weread_data.cookie 包成 accounts[0]
+                if weread_data.get("cookie"):
+                    accounts = [{
+                        "cookie": weread_data["cookie"],
+                        "vid": weread_data.get("vid", ""),
+                        "name": weread_data.get("name", ""),
+                    }]
+                else:
+                    accounts = []
+
+            # 如果相同 vid 已存在，更新它（重新扫码刷新 cookie）
+            existing_idx = next(
+                (i for i, a in enumerate(accounts) if str(a.get("vid", "")) == str(vid)),
+                None,
+            )
+            account_entry = {
+                "cookie": cookie_str,
+                "vid": str(vid),
+                "name": result.get("name", "") or "",
+            }
+            if existing_idx is not None:
+                # 保留原有 name（如果用户改过）
+                account_entry["name"] = accounts[existing_idx].get("name", "")
+                accounts[existing_idx] = account_entry
+            else:
+                accounts.append(account_entry)
+
+            # 写回 accounts 数组，清掉旧格式字段
+            weread_data["accounts"] = accounts
+            for k in ("cookie", "vid", "name", "ticket"):
+                weread_data.pop(k, None)
 
             cfg.set("weread_data", weread_data)
             cfg.save_config()
             cfg.reload()
-            print_success(f"Weread QR: Cookie 已保存到 data/wx.lic (VID={vid})")
+            print_success(f"Weread QR: Cookie 已保存到 data/wx.lic (VID={vid})，当前共 {len(accounts)} 个账号")
 
         except Exception as e:
             print_error(f"Weread QR: 保存 Cookie 失败: {e}")

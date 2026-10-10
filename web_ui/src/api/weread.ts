@@ -52,9 +52,13 @@ export async function collectWereadNotes(params: {
     return http.post('/wx/weread/collect', params)
 }
 
-/** 清除 Cookie */
-export async function clearWereadCookie() {
-    return http.delete('/wx/weread/cookie')
+/**
+ * 清除 Cookie
+ * - 传 vid：只清除该微信账号（保留其它账号）
+ * - 不传：清除全部账号（清空凭据，保留刷新配置）
+ */
+export async function clearWereadCookie(vid?: string) {
+    return http.delete('/wx/weread/cookie', { params: vid ? { vid } : {} })
 }
 
 // ---- 扫码授权 ----

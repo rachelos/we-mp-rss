@@ -1,1 +1,0 @@
-import{R as e}from"./index.12033d51.js";const o=t=>e.get("/wx/tags",{params:{offset:(t==null?void 0:t.offset)||0,limit:(t==null?void 0:t.limit)||100}}),n=t=>e.get(`/wx/tags/${t}`),u=t=>e.post("/wx/tags",t),c=(t,g)=>e.put(`/wx/tags/${t}`,g),i=t=>e.delete(`/wx/tags/${t}`);export{u as c,i as d,n as g,o as l,c as u};

@@ -1,7 +1,7 @@
 <template>
   <a-modal
     v-model:visible="visible"
-    title="微信读书扫码授权"
+    :title="`微信读书扫码授权${accountCount > 0 ? `（将添加为第 ${accountCount + 1} 个账号）` : ''}`"
     :footer="false"
     :mask-closable="false"
     width="420px"
@@ -27,7 +27,15 @@
           </div>
         </div>
         <p class="qrcode-tip">请使用微信扫描二维码授权</p>
-        <p class="qrcode-desc">用微信「扫一扫」扫码，确认登录微信读书网页版</p>
+        <p class="qrcode-desc">
+          用微信「扫一扫」扫码，确认登录微信读书网页版
+          <template v-if="accountCount > 0">
+            <br />已有 {{ accountCount }} 个账号，本次扫码将新增为第 {{ accountCount + 1 }} 个
+            （<a-tooltip content="配额按微信账号独立计算。A 号配额用尽时，采集会自动切到 B 号继续。">
+              <a @click.prevent>为什么需要多账号？</a>
+            </a-tooltip>）
+          </template>
+        </p>
 
         <!-- 等待状态 -->
         <div v-if="statusMsg && !loginSuccess" class="status-indicator">
@@ -41,7 +49,10 @@
         <div v-if="loginSuccess" class="success-indicator">
           <a-alert type="success">
             <template #icon><icon-check-circle-fill /></template>
-            授权成功！用户 ID: {{ loginVid }}
+            <template #title>
+              授权成功！用户 ID: {{ loginVid }}
+              <span v-if="accountCount > 0">（第 {{ accountCount + 1 }} 个账号已加入）</span>
+            </template>
           </a-alert>
         </div>
       </div>
@@ -59,7 +70,7 @@
 </template>
 
 <script lang="ts" setup>
-import { ref, onUnmounted } from 'vue'
+import { ref, computed, onUnmounted } from 'vue'
 import {
   getWereadQrCode,
   checkWereadQrStatus,
@@ -67,7 +78,15 @@ import {
 } from '@/api/weread'
 import { Message } from '@arco-design/web-vue'
 
+const props = defineProps<{
+  // 已有账号数量：用于提示「本次扫码将新增为第 N 个账号」。
+  // 纯展示，父组件未传时按 0 处理，行为与旧版一致。
+  accountCount?: number
+}>()
+
 const emit = defineEmits(['success', 'cancel'])
+
+const accountCount = computed(() => props.accountCount || 0)
 
 const visible = ref(false)
 const loading = ref(false)
