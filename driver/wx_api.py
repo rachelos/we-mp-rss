@@ -94,34 +94,69 @@ class WeChatAPI:
             self.notice_callback = notice
             
             try:
-                # 获取登录页面
-                response = self.session.get(self.login_url)
-                response.raise_for_status()
-                
-                # 解析页面获取二维码相关信息
-                qr_info = self._extract_qr_info(response.text)
-                
-                if qr_info:
-                    # 生成二维码图片
-                    self._generate_qr_image(qr_info['qr_url'])
-                    self.set_lock()
-                    # 启动登录状态检查
-                    self._start_login_check(qr_info['uuid'])
-                    if  self.notice_callback is not None:
-                        self.notice_callback()
-                    return {
-                        'code': f"{self.qr_code_path}?t={int(time.time())}",
-                        'is_exists': os.path.exists(self.qr_code_path),
-                        'uuid': qr_info['uuid'],
-                        'msg': '请使用微信扫描二维码登录'
-                    }
-                else:
+                # 微信已改版登录页，旧版"抓取登录页 HTML 抠二维码 URL"的正则
+                # 永远匹配不到（_extract_qr_info 返回 None → wx_qrcode.png 永不生成 → 前端 404）。
+                # 改用新版 bizlogin startlogin 流程：
+                # startlogin 拿 uuid cookie → scanloginqrcode getqrcode 拉二维码 PNG → ask 轮询。
+                self.fingerprint = self._generate_uuid()
+                resp = self.session.post(
+                    f"{self.base_url}/cgi-bin/bizlogin",
+                    params={"action": "startlogin"},
+                    data={
+                        "fingerprint": self.fingerprint,
+                        "token": "",
+                        "lang": "zh_CN",
+                        "f": "json",
+                        "ajax": "1",
+                        "redirect_url": "/cgi-bin/home?t=home/index&lang=zh_CN",
+                        "login_type": "3",
+                    },
+                    timeout=15,
+                )
+                resp.raise_for_status()
+                uuid = self.session.cookies.get("uuid")
+                if not uuid:
+                    m = re.search(r"uuid['\"]?\s*[:=]\s*['\"]([^'\"]+)", resp.text)
+                    uuid = m.group(1) if m else None
+                if not uuid:
                     return {
                         'code': None,
                         'is_exists': False,
-                        'msg': '获取二维码失败'
+                        'msg': 'startlogin 未返回 uuid: %s' % resp.text[:80]
                     }
-                    
+                # ask 轮询依赖会话中的 uuid cookie 与一致的 fingerprint
+                self.session.cookies.set("uuid", uuid)
+                self.cookies = {"fingerprint": self.fingerprint}
+
+                # 拉取二维码图片（PNG 二进制）
+                timestamp = int(time.time() * 1000)
+                qr = self.session.get(
+                    f"{self.base_url}/cgi-bin/scanloginqrcode",
+                    params={"action": "getqrcode", "uuid": uuid, "random": timestamp},
+                    timeout=15,
+                )
+                if "image" not in qr.headers.get("Content-Type", ""):
+                    return {
+                        'code': None,
+                        'is_exists': False,
+                        'msg': '二维码获取失败: %s' % qr.headers.get("Content-Type", "")
+                    }
+                with open(self.qr_code_path, 'wb') as f:
+                    f.write(qr.content)
+                logger.info(f"二维码获取成功（startlogin 流程），已保存到: {self.qr_code_path}")
+
+                self.set_lock()
+                # 启动登录状态检查
+                self._start_login_check(uuid)
+                if  self.notice_callback is not None:
+                    self.notice_callback()
+                return {
+                    'code': f"{self.qr_code_path}?t={int(time.time())}",
+                    'is_exists': os.path.exists(self.qr_code_path),
+                    'uuid': uuid,
+                    'msg': '请使用微信扫描二维码登录'
+                }
+
             except Exception as e:
                 logger.error(f"获取二维码失败: {str(e)}")
                 return {
