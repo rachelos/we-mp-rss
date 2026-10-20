@@ -28,7 +28,6 @@ def send_bark_message(webhook_url, title, text):
             headers={"Content-Type": "application/json; charset=utf-8"},
             timeout=10
         )
-        print(payload)
-        print(response.text)
+        print(f"Bark 通知发送完成，status_code={response.status_code}")
     except Exception as e:
         print("Bark 通知发送失败", e)
