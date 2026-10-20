@@ -1,5 +1,5 @@
 annotated-types==0.7.0
-anyio==4.5.2
+anyio==4.14.2
 APScheduler==3.11.0
 attrs==25.3.0
 bcrypt==4.3.0
