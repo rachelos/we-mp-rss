@@ -40,7 +40,7 @@ redis:
   server:
     enabled: ${REDIS_SERVER_ENABLED:-True}
     #监听地址
-    host: ${REDIS_SERVER_HOST:-0.0.0.0}
+    host: ${REDIS_SERVER_HOST:-127.0.0.1}
     #监听端口
     port: ${REDIS_SERVER_PORT:-6379}
     #最大内存 (MB)
@@ -160,6 +160,10 @@ proxy:
   http_url: ${PROXY_HTTP_URL:-}
 #安全配置
 safe:
+    # 自定义模板具备 Python 表达式执行能力；仅可信管理员可显式启用。
+    enable_custom_rss_template: ${ENABLE_CUSTOM_RSS_TEMPLATE:-False}
+    # Web Git 管理可修改服务代码；默认关闭，启用后仍需管理员认证。
+    enable_web_updater: ${ENABLE_WEB_UPDATER:-False}
     # 需要隐藏的配置信息，用逗号分隔 如：db,secret,token等 
     hide_config: "${SAFE_HIDE_CONFIG:-db,secret,token,weread.cookie,weread.ticket,notice.wechat,notice.feishu,notice.dingding}"
     # 授权加密KEY

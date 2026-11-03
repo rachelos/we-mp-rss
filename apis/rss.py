@@ -8,6 +8,7 @@ import json
 from .base import success_response, error_response
 from core.auth import get_current_user
 from core.config import cfg
+from core.security import guard_rss_template
 from apis.base import format_search_kw
 from core.print import print_error,print_success
 
@@ -181,7 +182,7 @@ async def update_rss_feeds(
 
 
 
-@router.get("/{feed_id}", summary="获取公众号文章")
+@router.get("/{feed_id}", summary="获取公众号文章", dependencies=[Depends(guard_rss_template)])
 async def get_mp_articles_source(
     request: Request,
     feed_id: str=None,
