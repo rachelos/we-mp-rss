@@ -5,7 +5,7 @@ services:
     container_name: we-mp-rss
     restart: unless-stopped
     ports:
-      - "8001:8001"
+      - "127.0.0.1:8001:8001"
     environment:
       - DB=sqlite:///data/we_mp_rss.db
       - USERNAME=admin

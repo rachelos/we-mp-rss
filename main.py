@@ -16,9 +16,7 @@ from driver.auth import start_auth_service
 import os
 
 if __name__ == '__main__':
-    print("环境变量:")
-    for k,v in os.environ.items():
-        print(f"{k}={v}")
+    # 环境变量可能包含账号凭据和密钥，不写入启动日志。
     if cfg.args.init=="True":
         import init_sys as init
         init.init()

@@ -5,7 +5,7 @@ services:
     restart: unless-stopped
     command: redis-server --appendonly yes --maxmemory 64mb --maxmemory-policy allkeys-lru
     ports:
-      - "6379:6379"
+      - "127.0.0.1:6379:6379"
     volumes:
       - redis_data:/data
     healthcheck:
@@ -32,7 +32,7 @@ services:
       HEADLESS: "false"
       DISPLAY: :99
     ports:
-      - "8001:8001"
+      - "127.0.0.1:8001:8001"
     volumes:
       - ../apis:/app/apis
       - ../core:/app/core
@@ -83,7 +83,7 @@ services:
     depends_on:
       - backend
     ports:
-      - "5173:5173"
+      - "127.0.0.1:5173:5173"
     volumes:
       - ../web_ui:/app/web_ui
       - web_ui_node_modules:/app/web_ui/node_modules

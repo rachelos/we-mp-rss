@@ -4,16 +4,18 @@
 GitHub 更新 API 接口
 """
 
-from fastapi import APIRouter, HTTPException, BackgroundTasks
+from fastapi import APIRouter, HTTPException, BackgroundTasks, Depends
 from pydantic import BaseModel
 from typing import Optional, List
 import logging
 import os
 from tools.github_updater import GitHubUpdater
+from core.security import require_web_updater
 
 logger = logging.getLogger(__name__)
 
-router = APIRouter(prefix="/github", tags=["GitHub更新"])
+router = APIRouter(prefix="/github", tags=["GitHub更新"],
+                   dependencies=[Depends(require_web_updater)])
 
 
 class UpdateRequest(BaseModel):
