@@ -1,4 +1,5 @@
 from logging import info
+import re
 from fastapi import APIRouter, Depends, HTTPException, status, Query, Body, UploadFile, File
 from fastapi.responses import FileResponse
 from fastapi.background import BackgroundTasks
@@ -212,14 +213,29 @@ async def search_mp(
         }
         return success_response(data)
     except Exception as e:
-        print(f"搜索公众号错误: {str(e)}")
+        # requests 的异常信息里带有请求 URL，其中包含 token，打印前先脱敏
+        safe_err = re.sub(r"(token=)[^&\s'\"]+", r"\1***", str(e))
+        print(f"搜索公众号错误: {type(e).__name__}: {safe_err}")
         raise HTTPException(
             status_code=status.HTTP_201_CREATED,
             detail=error_response(
                 code=50001,
-                message=f"搜索公众号失败,请重新扫码授权！",
+                message=_search_mp_error_message(e),
             )
         )
+
+
+def _search_mp_error_message(e: Exception) -> str:
+    """按异常类型给出搜索失败提示，避免把网络错误误报为授权失效"""
+    import requests
+    from core.wx.base import WxAuthError, WxRateLimitError
+    if isinstance(e, WxAuthError):
+        return "搜索公众号失败,请重新扫码授权！"
+    if isinstance(e, WxRateLimitError):
+        return "搜索公众号过于频繁，已被微信限流，请稍后再试"
+    if isinstance(e, requests.exceptions.RequestException):
+        return f"无法连接微信公众平台（{type(e).__name__}），请检查网络或代理设置"
+    return "搜索公众号失败，请查看服务日志"
 
 @router.get("", summary="获取公众号列表")
 async def get_mps(
