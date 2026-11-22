@@ -38,6 +38,14 @@ USER_AGENTS = [
     "Mozilla/5.0 (iPhone; CPU iPhone OS 16_5 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/16.5 Mobile/15E148 Safari/604.1"
 ]
 # 定义基类
+class WxAuthError(Exception):
+    """公众号平台登录失效或未登录"""
+
+
+class WxRateLimitError(Exception):
+    """公众号平台接口触发频率限制（ret=200013）"""
+
+
 class WxGather:
     articles=[]
     aids=[]
@@ -295,7 +303,7 @@ class WxGather:
         headers=self.fix_header(url)
         if self.token is None or self.token == "":
             self.Error("请先扫码登录公众号平台")
-            return
+            raise WxAuthError("请先扫码登录公众号平台")
         data={}
         try:
             proxies = self._get_proxies()
@@ -310,7 +318,7 @@ class WxGather:
             msg = json.loads(data)  # 手动解析
             if msg['base_resp']['ret'] == 200013:
                 self.Error("frequencey control, stop at {}".format(str(kw)))
-                return
+                raise WxRateLimitError("frequencey control, stop at {}".format(str(kw)))
             if msg['base_resp']['ret'] != 0:
                 self.Error("错误原因:{}:代码:{}".format(msg['base_resp']['err_msg'],msg['base_resp']['ret']),code="Invalid Session")
                 return 
@@ -359,7 +367,7 @@ class WxGather:
             setStatus(False)
             threading.Thread(target=send_wx_code,args=(f"公众号平台登录失效,请重新登录",)).start()
             # send_wx_code(f"公众号平台登录失效,请重新登录")
-            raise Exception(error)
+            raise WxAuthError(error)
         # raise Exception(error)
         print_error(error)
 
